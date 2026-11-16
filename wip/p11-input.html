@@ -9,6 +9,8 @@ window.addEventListener('keydown',e=>{
   if(k==='m'){ muted=!muted; addText(player.x,player.y-26,muted?'Muted':'Sound on','#c9d1d9'); }
   if(k==='b'){ state.dbg=!state.dbg; }
   if(k==='p' && state.mode==='play'){ state.paused=!state.paused; }
+  if(k==='i' && state.mode==='play' && !state.dialog){ state.inv=!state.inv; return; }
+  if(state.inv && k==='escape'){ state.inv=false; return; }
   if(state.mode==='title' && (k==='enter'||k===' ')){ startGame(); return; }
   if(state.mode==='dead' && k==='enter'){ respawn(); return; }
   if(state.mode==='victory' && k==='enter'){ state.mode='play'; state.firstVictory=false; return; }
@@ -29,6 +31,27 @@ window.addEventListener('keydown',e=>{
     return;
   }
   if(state.mode!=='play') return;
+  if(state.cine) return; // cinematic freeze
+  if(state.inv) return;  // inventory open
+  // quickbar slots 1-5 (selection only — LMB uses the selected slot)
+  if(k>='1'&&k<='5'){ selectSlot(+k-1,false); return; }
+  if(k==='shift' && player.abilities.dash && player.dashCd<=0 && !player.drinkKind){
+    player.dashT=0.16; player.dashCd=1.8;
+    player.dashDir=Math.atan2(player.face.y||0.01,player.face.x||1);
+    sfx('dash'); burst(player.x,player.y,'#9ad1ff',12,150,0.4,3);
+    return;
+  }
+  if(k==='f'){
+    if(!player.abilities.whirl){ sfx('denied'); addText(player.x,player.y-26,'No whirl ability yet (Dune Serpent)','#c9d1d9'); }
+    else doWhirl();
+    return;
+  }
+  if(k==='r'){
+    if(!player.bow){ sfx('denied'); addText(player.x,player.y-26,'No bow yet — Finn sells them','#c9d1d9'); }
+    else { player.weapon = player.weapon==='bow' ? 'sword' : 'bow'; sfx('coin');
+      addText(player.x,player.y-26,'Weapon: '+(player.weapon==='bow'?'Bow':'Sword'),'#ffd75e'); }
+    return;
+  }
   if(k==='e') interact();
   if(k==='q') drinkPotion();
   if(k===' '||k==='j') doAttack(Math.atan2(player.face.y,player.face.x));
@@ -41,9 +64,23 @@ cvs.addEventListener('mousedown',e=>{
   if(state.mode==='title'){ startGame(); return; }
   if(state.mode==='dead'){ respawn(); return; }
   if(state.mode==='victory'){ state.mode='play'; state.firstVictory=false; return; }
-  if(state.dialog||state.paused||state.trans) return;
-  const wx=mouse.x+cam.x, wy=mouse.y+cam.y;
-  doAttack(Math.atan2(wy-player.y,wx-player.x));
+  if(state.dialog||state.paused||state.trans||state.cine||state.inv) return;
+  // quickbar hit-test first (Fortnite-style: click a slot to select & use)
+  const q=qbarLayout();
+  for(let i=0;i<q.length;i++){
+    const s=q[i];
+    if(mouse.x>=s.x&&mouse.x<s.x+s.w&&mouse.y>=s.y&&mouse.y<s.y+s.h){
+      selectSlot(i,true); return;
+    }
+  }
+  // otherwise LMB uses the currently selected slot
+  const slot=QUICKBAR[state.selSlot];
+  if(slot.kind==='weapon'){
+    const wx=mouse.x+cam.x, wy=mouse.y+cam.y;
+    doAttack(Math.atan2(wy-player.y,wx-player.x));
+  } else {
+    selectSlot(state.selSlot,true);
+  }
 });
 cvs.addEventListener('contextmenu',e=>e.preventDefault());
 
@@ -52,6 +89,25 @@ function startGame(){
   player.x=VILLAGE.x*TS+TS/2; player.y=(VILLAGE.y+2.2)*TS;
   sfx('quest');
   addText(player.x,player.y-40,'Welcome to Emberfall','#ffd75e',3,true);
+}
+
+/* ---------------- quickbar (5 slots, top-right, keys 1-5 + LMB) ---------------- */
+function selectSlot(i,useIt){
+  if(i<0||i>=QUICKBAR.length) return;
+  state.selSlot=i; state.slotFlash=0.25;
+  const s=QUICKBAR[i];
+  if(s.kind==='weapon'){
+    if(player.weapon!==s.weapon){ player.weapon=s.weapon; sfx('coin'); }
+    addText(player.x,player.y-24,s.name+' equipped','#ffd75e',0.9);
+  }
+  if(useIt) useQuickbar(i);
+}
+function useQuickbar(i){
+  const s=QUICKBAR[i];
+  if(s.kind==='weapon'){
+    player.weapon=s.weapon;
+    doAttack(Math.atan2(player.face.y||0.01,player.face.x||1));
+  } else startDrink(s.id);
 }
 function respawn(){
   if(state.floor!==0){ genSurface(); spawnNPCs(); buildMinimap(); state.floor=0; }

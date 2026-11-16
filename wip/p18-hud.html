@@ -41,6 +41,7 @@ function drawHUD(){
   if(q.state==='active'){
     qline('◈ '+QUESTS[q.id].title+' — '+QUESTS[q.id].goal,'#7ee787');
     if(q.id==='q1') qline('   '+q.prog+' / 8 slimes slain','#9ad1ff');
+    if(q.id==='q2') qline('   Warden: '+(state.flags.warden?'✓ slain':'— prowls the wastes'),'#9ad1ff');
     if(q.id==='q4'){
       qline('   Cinder Golem: '+(state.flags.golem?'✓':'—')+'   Malachar: '+(state.flags.malachar?'✓':'—'),'#9ad1ff');
     }
@@ -53,6 +54,36 @@ function drawHUD(){
     ctx.fillStyle='rgba(20,14,4,0.7)'; roundRect(14,qy-13,240,20,6); ctx.fill();
     ctx.fillStyle='#ffd75e'; ctx.font='bold 11px system-ui';
     ctx.fillText('✦ Shrine trial — '+s.left+' guardians left',22,qy+1);
+    qy+=26;
+  }
+
+  // ember seal progress
+  if(state.floor>0 && state.sealSet && state.sealSet.size){
+    if(!state.sealOpen){
+      const left=enemies.filter(e=>!e.minion && !e.shrineRef && !e.vaultGuard).length;
+      ctx.fillStyle='rgba(26,8,2,0.72)'; roundRect(14,qy-13,240,20,6); ctx.fill();
+      ctx.fillStyle='#ff8a5e'; ctx.font='bold 11px system-ui'; ctx.textAlign='left';
+      ctx.fillText('✖ Ember Seal — '+left+' foes remain',22,qy+1);
+    } else if(!state.bossesDead[state.floor]){
+      ctx.fillStyle='rgba(26,8,2,0.72)'; roundRect(14,qy-13,240,20,6); ctx.fill();
+      ctx.fillStyle='#ffd75e'; ctx.font='bold 11px system-ui'; ctx.textAlign='left';
+      ctx.fillText('✔ The Seal is broken — guardian awaits',22,qy+1);
+    }
+    qy+=26;
+  }
+
+  // out-of-combat regeneration status
+  if(p.hp<p.maxHp){
+    if(p.hurtT>=30){
+      ctx.fillStyle='rgba(10,26,14,0.7)'; roundRect(14,qy-13,240,20,6); ctx.fill();
+      ctx.fillStyle='#7ee787'; ctx.font='bold 11px system-ui'; ctx.textAlign='left';
+      ctx.fillText('✚ Regenerating +1 HP/s',22,qy+1);
+    } else {
+      const left=Math.max(0,30-p.hurtT);
+      ctx.fillStyle='rgba(10,12,18,0.55)'; roundRect(14,qy-13,240,20,6); ctx.fill();
+      ctx.fillStyle='#8b949e'; ctx.font='11px system-ui'; ctx.textAlign='left';
+      ctx.fillText('✚ Regen in '+Math.ceil(left)+'s',22,qy+1);
+    }
     qy+=26;
   }
 

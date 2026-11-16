@@ -29,9 +29,11 @@ function frame(now){
   // depth-sorted entities
   const drawables=[];
   if(state.floor===0){
-    for(const tr of trees){
-      const sx=tr.x-cam.x, sy=tr.y-cam.y;
-      if(sx>-60&&sy>-90&&sx<VW+60&&sy<VH+60) drawables.push({y:tr.y,fn:()=>drawTreeOne(tr)});
+    const tx0=Math.max(0,Math.floor(cam.x/TS)-2), tx1=Math.min(mapW-1,Math.floor((cam.x+VW)/TS)+2);
+    const ty0=Math.max(0,Math.floor(cam.y/TS)-2), ty1=Math.min(mapH-1,Math.floor((cam.y+VH)/TS)+2);
+    for(let ty=ty0;ty<=ty1;ty++)for(let tx=tx0;tx<=tx1;tx++){
+      const tr=treeGrid.get(tx+','+ty);
+      if(tr) drawables.push({y:tr.y,fn:()=>drawTreeOne(tr)});
     }
     for(const rk of rocks){
       const sx=rk.x-cam.x, sy=rk.y-cam.y;
@@ -75,6 +77,8 @@ function frame(now){
     if(state.mode==='dead') drawDead();
     if(state.mode==='victory') drawVictory();
   }
+  drawCine();
+  drawInventory();
   drawTrans();
   requestAnimationFrame(frame);
 }

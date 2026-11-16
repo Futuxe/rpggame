@@ -84,3 +84,92 @@ function drawTrans(){
   ctx.fillStyle=`rgba(5,4,8,${a})`;
   ctx.fillRect(0,0,VW,VH);
 }
+
+/* ---------------- floor cinematic (Roblox-Doors style) ---------------- */
+function spacedText(txt,cx,y,size,color,weight='bold'){
+  ctx.save();
+  ctx.font=weight+' '+size+'px Georgia,serif';
+  ctx.textAlign='left'; ctx.textBaseline='alphabetic';
+  ctx.shadowColor='rgba(255,120,40,0.75)'; ctx.shadowBlur=18;
+  ctx.fillStyle=color;
+  const sp=size*0.38;
+  let w=0;
+  for(const ch of txt) w+=ctx.measureText(ch).width+sp;
+  w-=sp;
+  let x=cx-w/2;
+  for(const ch of txt){ ctx.fillText(ch,x,y); x+=ctx.measureText(ch).width+sp; }
+  ctx.restore();
+}
+function drawCine(){
+  const c=state.cine; if(!c) return;
+  const tt=c.t/c.dur;
+  const a= tt<0.16 ? tt/0.16 : tt>0.84 ? Math.max(0,(1-tt)/0.16) : 1;
+  ctx.fillStyle=`rgba(3,2,5,${0.88*a})`;
+  ctx.fillRect(0,0,VW,VH);
+  if(a<=0.02) return;
+  ctx.save();
+  ctx.globalAlpha=a;
+  // drifting embers
+  for(let i=0;i<26;i++){
+    const x=((hash2(i,4)*VW + state.time*14*(0.35+hash2(i,8)))%(VW+30))-15;
+    const y=VH-((state.time*(26+hash2(i,6)*46)+hash2(i,2)*VH)%(VH+40));
+    ctx.fillStyle=`rgba(255,${120+hash2(i,5)*70|0},50,${0.18+0.22*Math.abs(Math.sin(state.time*3+i))})`;
+    ctx.fillRect(x,y,2.5,2.5);
+  }
+  // thin frame rules
+  ctx.strokeStyle='rgba(255,140,70,0.35)'; ctx.lineWidth=1;
+  ctx.beginPath();
+  ctx.moveTo(VW*0.28,VH*0.31); ctx.lineTo(VW*0.72,VH*0.31);
+  ctx.moveTo(VW*0.28,VH*0.655); ctx.lineTo(VW*0.72,VH*0.655);
+  ctx.stroke();
+  const slide=(1-Math.min(1,tt/0.16))*26;
+  spacedText(c.head,VW/2,VH*0.415+slide,46,'#ffe08a');
+  if(c.title) spacedText(c.title,VW/2,VH*0.525,25,'#ff8a5e');
+  if(c.sub){
+    ctx.font='italic 17px Georgia,serif'; ctx.fillStyle='#c9d1d9'; ctx.textAlign='center';
+    ctx.fillText('— '+c.sub+' —',VW/2,VH*0.60);
+  }
+  ctx.font='10px system-ui'; ctx.fillStyle='rgba(255,255,255,0.35)'; ctx.textAlign='center';
+  ctx.fillText('CLEAR EVERY FOE TO BREAK THE EMBER SEAL',VW/2,VH-46);
+  ctx.restore();
+}
+
+/* ---------------- inventory overlay (I) ---------------- */
+function drawInventory(){
+  if(!state.inv) return;
+  const p=player;
+  ctx.fillStyle='rgba(4,3,8,0.72)'; ctx.fillRect(0,0,VW,VH);
+  const w=Math.min(640,VW-48), h=Math.min(400,VH-48);
+  const x=(VW-w)/2, y=(VH-h)/2;
+  ctx.fillStyle='rgba(14,12,19,0.97)'; roundRect(x,y,w,h,14); ctx.fill();
+  ctx.strokeStyle='rgba(255,170,80,0.5)'; ctx.lineWidth=2; roundRect(x+1,y+1,w-2,h-2,13); ctx.stroke();
+  spacedText('INVENTORY',VW/2,y+50,26,'#ffe08a');
+  ctx.font='11px system-ui'; ctx.fillStyle='rgba(201,209,217,0.55)'; ctx.textAlign='center';
+  ctx.fillText('press I to close',VW/2,y+70);
+  const colW=(w-80)/2, lx=x+40, rx=x+w/2+20;
+  const head=(hx,hy,txt)=>{ ctx.fillStyle='#ff8a5e'; ctx.font='bold 11px system-ui'; ctx.textAlign='left'; ctx.fillText(txt,hx,hy); };
+  const card=(cx,cy,cw,icon,title,value,sub,accent)=>{
+    ctx.fillStyle='rgba(255,255,255,0.045)'; roundRect(cx,cy,cw,54,8); ctx.fill();
+    ctx.strokeStyle='rgba(255,255,255,0.08)'; ctx.lineWidth=1; roundRect(cx,cy,cw,54,8); ctx.stroke();
+    ctx.fillStyle=accent; ctx.beginPath(); ctx.arc(cx+22,cy+27,11,0,TAU); ctx.fill();
+    ctx.fillStyle='#14121a'; ctx.font='bold 12px system-ui'; ctx.textAlign='center'; ctx.fillText(icon,cx+22,cy+31);
+    ctx.textAlign='left';
+    ctx.fillStyle='rgba(255,255,255,0.55)'; ctx.font='bold 9px system-ui'; ctx.fillText(title,cx+40,cy+17);
+    ctx.fillStyle='#fff'; ctx.font='bold 14px system-ui'; ctx.fillText(value,cx+40,cy+34);
+    ctx.fillStyle='rgba(201,209,217,0.55)'; ctx.font='10px system-ui'; ctx.fillText(sub,cx+40,cy+47);
+  };
+  head(lx,y+100,'EQUIPMENT');
+  card(lx,y+108,colW,'⚔','SWORD',(p.dmg+p.swordBonus)+' damage','sharpened '+p.swordLvl+'×',p.weapon==='sword'?'#ffd75e':'#5a4a2e');
+  card(lx,y+170,colW,'➶','BOW', p.bow?(9+p.bowLvl*5)+' damage':'not owned', p.bow?('Lv.'+p.bowLvl+' · '+p.arrows+' arrows'):'Finn sells bows — 180g', p.bow?'#9ad1ff':'#3a3a44');
+  card(lx,y+232,colW,'✚','ARMOR',(p.armor*8)+'% reduction','tier '+p.armor,'#7ee787');
+  card(lx,y+294,colW,'✦','LANTERN','level '+p.lightLvl,'light radius '+(150+42*p.lightLvl),'#ffe08a');
+
+  head(rx,y+100,'SATCHEL');
+  card(rx,y+108,colW,'●','GOLD',p.gold+' gold','coin purse','#ffd75e');
+  card(rx,y+170,colW,'♥','POTIONS',p.potions+' potions','press Q to drink','#ff7b8f');
+  card(rx,y+232,colW,'➶','ARROWS',p.arrows+' arrows',p.bow?'ready to fire':'need a bow','#d8cfa8');
+  card(rx,y+294,colW,'☠','SLAIN',killCount+' foes','level '+p.level+' hero','#c46bff');
+  ctx.textAlign='center'; ctx.font='11px system-ui'; ctx.fillStyle='rgba(255,255,255,0.4)';
+  ctx.fillText('R swap weapon · Q potion · E interact · Space attack',VW/2,y+h-22);
+}
+

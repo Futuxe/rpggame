@@ -24,8 +24,7 @@ function killEnemy(e){
       addText(e.shrineRef.x,e.shrineRef.y-30,'Shrine cleared — take its blessing!','#7ee787',2.4,true);
       burst(e.shrineRef.x,e.shrineRef.y,'#7ee787',30,180,0.9,4);
       for(let i=0;i<8;i++) drops.push({type:'coin',x:e.shrineRef.x+rnd(-26,26),y:e.shrineRef.y+rnd(-26,26),val:Math.ceil(rnd(4,9)),t:rnd(TAU),vx:rnd(-70,70),vy:rnd(-70,70)});
-      for(let i=0;i<2;i++) drops.push({type:'potion',x:e.shrineRef.x+rnd(-20,20),y:e.shrineRef.y+rnd(-20,20),t:rnd(TAU),vx:0,vy:0});
-      for(let i=0;i<2;i++) drops.push({type:'gem',x:e.shrineRef.x+rnd(-16,16),y:e.shrineRef.y+rnd(-16,16),val:Math.ceil(rnd(25,60)),t:rnd(TAU),vx:rnd(-40,40),vy:rnd(-40,40)});
+      for(let i=0;i<3;i++) drops.push({type:'gem',x:e.shrineRef.x+rnd(-16,16),y:e.shrineRef.y+rnd(-16,16),val:Math.ceil(rnd(25,60)),t:rnd(TAU),vx:rnd(-40,40),vy:rnd(-40,40)});
     }
   }
   if(state.quest.id==='q1' && state.quest.state==='active' && e.type==='slime'){
@@ -35,8 +34,8 @@ function killEnemy(e){
   }
   const ncoins=1+((Math.random()*3)|0);
   for(let i=0;i<ncoins;i++) drops.push({type:'coin',x:e.x+rnd(-8,8),y:e.y+rnd(-8,8),val:Math.ceil(rnd(1,5)),t:rnd(TAU),vx:rnd(-40,40),vy:rnd(-40,40)});
-  if(Math.random()<0.12 || e.elite) drops.push({type:'potion',x:e.x,y:e.y,t:rnd(TAU),vx:0,vy:0});
-  if(Math.random()<0.28 || e.elite) drops.push({type:'gem',x:e.x+rnd(-6,6),y:e.y+rnd(-6,6),val:Math.ceil(e.xp*0.4),t:rnd(TAU),vx:rnd(-30,30),vy:rnd(-30,30)});
+  if(Math.random()<0.22 || e.elite) drops.push({type:'gem',x:e.x+rnd(-6,6),y:e.y+rnd(-6,6),val:Math.ceil(e.xp*0.4),t:rnd(TAU),vx:rnd(-30,30),vy:rnd(-30,30)});
+  // health flasks are ONLY dropped by defeated guardians (see defeatBoss)
 }
 function gainXp(v){
   player.xp+=v;
@@ -57,6 +56,8 @@ function hurtPlayer(dmg,fromX,fromY){
   const red=1-Math.min(0.5,player.armor*0.08);
   const d=Math.max(1,Math.round(dmg*red));
   player.hp-=d; player.invulnT=0.7; player.hurtFlash=0.3;
+  player.hurtT=0; player.regenAcc=0;
+  if(player.drinkKind) cancelDrink('Drink interrupted!'); // a hit spoils the channel (item kept)
   addText(player.x,player.y-26,'-'+d,'#ff6b6b');
   const a=Math.atan2(player.y-fromY,player.x-fromX);
   moveEntity(player,Math.cos(a)*14,Math.sin(a)*14);
@@ -67,11 +68,21 @@ function hurtPlayer(dmg,fromX,fromY){
   }
 }
 function doAttack(dirAng){
+  if(player.weapon==='bow'){
+    if(player.atkCd>0 || player.bowDraw>0) return;
+    if(player.arrows<=0){ addText(player.x,player.y-26,'No arrows!','#ff9a9a'); sfx('denied'); return; }
+    /* fortnite-style draw: the arrow flies once the string is pulled back */
+    player.bowDraw=0.38; player.fireAng=dirAng; player.atkCd=0.58;
+    player.swingT=0.38; player.swingDir=dirAng;
+    player.face.x=Math.cos(dirAng); player.face.y=Math.sin(dirAng);
+    sfx('arrow');
+    return;
+  }
   if(player.atkCd>0) return;
   player.atkCd=0.38; player.swingT=0.18; player.swingDir=dirAng;
   player.face.x=Math.cos(dirAng); player.face.y=Math.sin(dirAng);
   sfx('swing');
-  const range=48, dmg=player.dmg+player.swordBonus;
+  const range=48, dmg=player.dmg+player.swordBonus+(player.strT>0?8:0);
   for(const e of [...enemies, ...(state.boss?[state.boss]:[])]){
     const d=dist(player.x,player.y,e.x,e.y);
     if(d>range+e.r) continue;
@@ -83,3 +94,29 @@ function doAttack(dirAng){
     }
   }
 }
+/* Dune Serpent's gift: a spinning 360° blade sweep */
+function doWhirl(){
+  if(player.whirlCd>0 || player.atkCd>0) return;
+  player.whirlCd=2.6; player.whirlT=0.35; player.atkCd=0.5;
+  sfx('nova'); shake(0.15,3);
+  const range=72, dmg=(player.dmg+player.swordBonus)*1.2;
+  for(const e of [...enemies, ...(state.boss?[state.boss]:[])]){
+    const d=dist(player.x,player.y,e.x,e.y);
+    if(d>range+e.r) continue;
+    const a=Math.atan2(e.y-player.y,e.x-player.x);
+    const kx=Math.cos(a)*280, ky=Math.sin(a)*280;
+    if(e===state.boss) damageBoss(dmg,kx*0.25,ky*0.25); else damageEnemy(e,dmg,kx,ky);
+  }
+  for(let i=0;i<12;i++) parts.push({x:player.x+Math.cos(i/12*TAU)*30,y:player.y+Math.sin(i/12*TAU)*30,
+    vx:Math.cos(i/12*TAU)*120,vy:Math.sin(i/12*TAU)*120,life:0.3,max:0.3,color:'#ffb36b',size:3,grav:0});
+}
+function fireBow(dirAng){
+  if(player.arrows<=0) return;
+  player.arrows--;
+  const dmg=9+player.bowLvl*5;
+  arrows.push({x:player.x+Math.cos(dirAng)*14, y:player.y+Math.sin(dirAng)*14,
+    vx:Math.cos(dirAng)*470, vy:Math.sin(dirAng)*470, life:1.2, dmg,
+    kind:'player', friendly:true, pierce:player.abilities.pierce, hitSet:[]});
+  sfx('bow');
+}
+function shootBow(dirAng){ fireBow(dirAng); }

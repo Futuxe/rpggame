@@ -1,21 +1,36 @@
 /* ---------------- game state ---------------- */
 const state={
   mode:'title', // title | play | dead | victory
-  time:0, floor:0, paused:false, dbg:false,
+  time:0, floor:0, paused:false, dbg:false, inv:false,
   shakeT:0, shakeMag:0, spawnT:0,
-  boss:null, bossesDead:{}, portal:null, trans:null, dialog:null,
+  boss:null, bossesDead:{}, portal:null, trans:null, dialog:null, cine:null,
   quest:{id:'q1', state:'none', prog:0},
-  flags:{descended:false, golem:false, malachar:false},
+  flags:{descended:false, golem:false, malachar:false, warden:false},
+  selSlot:0, slotFlash:0, biomeDead:{}, biomeAltars:[],
   openedChests:new Set(), doneShrines:new Set(),
+  sealTiles:[], sealSet:new Set(), sealOpen:true,
   won:false, firstVictory:true,
 };
 const player={
   x:0, y:0, r:10, speed:175, hp:100, maxHp:100,
-  level:1, xp:0, gold:25, potions:2,
+  level:1, xp:0, gold:25, potions:1, brews:0, tonics:0,
   dmg:12, armor:0, swordBonus:0, swordLvl:0, armorLvl:0, lightLvl:0,
+  bow:false, arrows:0, bowLvl:0, weapon:'sword',
   face:{x:1,y:0}, walkT:0, moving:false,
   atkCd:0, swingT:0, swingDir:0, invulnT:0, hurtFlash:0,
+  hurtT:999, regenAcc:0, itemCd:0, strT:0, spdT:0,
+  bowCharge:0, bowAngle:0, dashT:0, dashCd:0, dashDir:0, whirlT:0, whirlCd:0,
+  /* fortnite-style drinking: channel an item, you cannot move until it's done */
+  drinkT:0, drinkMax:0, drinkKind:null, drinkAng:0,
+  abilities:{dash:false,regenPlus:false,pierce:false,whirl:false},
 };
+const QUICKBAR=[
+  {id:'sword',  name:'Ember Blade',    kind:'weapon', weapon:'sword', color:'#d8d8e2', key:'1'},
+  {id:'bow',    name:'Warden Bow',     kind:'weapon', weapon:'bow',   color:'#ffe08a', key:'2'},
+  {id:'potion', name:'Health Flask',   kind:'heal',   color:'#ff7b8f', key:'3', count:()=>player.potions},
+  {id:'brew',   name:'Strength Brew',  kind:'buff',   color:'#ff9a3d', key:'4', count:()=>player.brews},
+  {id:'tonic',  name:'Swift Tonic',    kind:'buff',   color:'#7ee7ff', key:'5', count:()=>player.tonics},
+];
 let enemies=[], arrows=[], drops=[], parts=[], texts=[];
 const npcs=[];
 let killCount=0, playTime=0;
@@ -23,7 +38,7 @@ let killCount=0, playTime=0;
 /* ---------------- quests ---------------- */
 const QUESTS={
   q1:{title:'Slimy Situation',  goal:'Slay 8 slimes around Emberfall'},
-  q2:{title:'Into the Depths',  goal:'Descend into the Ember Depths'},
+  q2:{title:"The Warden's Seal",  goal:'Slay Moul, the Corrupted Warden guarding the depths'},
   q3:{title:'King of Bones',    goal:'Defeat the Bone King (Floor 1)'},
   q4:{title:'Fire Below',       goal:'Defeat the Cinder Golem & Malachar (Floors 2-3)'},
   q5:{title:'Champion of Ash',  goal:'Defeat Pyrelord Vex (Floor 4)'},
@@ -34,7 +49,7 @@ function questDone(id){
   const f=state.flags;
   switch(id){
     case 'q1': return state.quest.prog>=8;
-    case 'q2': return !!f.descended;
+    case 'q2': return !!f.warden;
     case 'q3': return !!state.bossesDead[1];
     case 'q4': return !!(f.golem&&f.malachar);
     case 'q5': return !!state.bossesDead[4];
@@ -92,8 +107,8 @@ const SPAWNS={
 };
 function makeEnemy(type,x,y,o={}){
   const d=EDEF[type], fl=Math.max(0,state.floor);
-  const boost=(1+fl*0.22)*(1+(player.level-1)*0.06);
-  const elite=o.elite||(!o.minion&&!o.shrineRef&&fl>0&&Math.random()<0.08+fl*0.02);
+  const boost=(1+fl*0.26)*(1+(player.level-1)*0.06);
+  const elite=o.elite||(!o.minion&&!o.shrineRef&&!o.vaultGuard&&fl>0&&Math.random()<0.10+fl*0.025);
   const em={
     type,x,y,r:d.r,hp:d.hp*boost,maxHp:d.hp*boost,
     spd:d.spd*(elite?0.92:1),
@@ -102,7 +117,8 @@ function makeEnemy(type,x,y,o={}){
     atkCd:rnd(0.5,1.5),shootCd:rnd(1,2.5),castCd:rnd(2,4),summonCd:rnd(4,7),
     wanderT:0,wa:rnd(TAU),flash:0,phase:rnd(TAU),kb:{x:0,y:0},
     flies:!!d.flies,kbr:d.kbr||0,shoots:!!d.shoots,casts:!!d.casts,
-    minion:!!o.minion,necroMinion:false,shrineRef:o.shrineRef||null,elite,
+    minion:!!o.minion,necroMinion:false,shrineRef:o.shrineRef||null,
+    vaultGuard:!!o.vaultGuard,elite,
   };
   if(elite) em.r*=1.35;
   enemies.push(em);
@@ -110,9 +126,9 @@ function makeEnemy(type,x,y,o={}){
 }
 function spawnEnemySurface(){
   if(state.mode!=='play') return;
-  const cap = Math.min(26, 14+player.level*2);
+  const cap = Math.min(40, 22+player.level*2);
   if(enemies.length>=cap) return;
-  const ang=rnd(TAU), d=rnd(560,940);
+  const ang=rnd(TAU), d=rnd(560,980);
   let x=player.x+Math.cos(ang)*d, y=player.y+Math.sin(ang)*d;
   const tx=Math.floor(x/TS), ty=Math.floor(y/TS);
   if(!circleFree(x,y,12)) return;
@@ -121,12 +137,21 @@ function spawnEnemySurface(){
   const inCorrupt = tileAt(tx,ty)===T_CORRUPT;
   let type;
   if(inCorrupt) type = Math.random()<0.65 ? 'wraith' : 'skeleton';
-  else if(dv>30) type = Math.random()<0.55 ? 'skeleton' : 'slime';
+  else if(dv>30){
+    // each biome brings its own monster pool
+    const b=biomeAt(tx,ty).id;
+    const pool = b==='frost'  ? ['skeleton','bat','skeleton'] :
+                 b==='marsh'  ? ['slime','dslime','slime'] :
+                 b==='crystal'? ['bat','wraith','skeleton'] :
+                 b==='dune'   ? ['dslime','skeleton','dslime'] :
+                 b==='ashen'  ? ['wraith','skeleton'] : ['slime','skeleton'];
+    type=pick(pool);
+  }
   else type='slime';
   makeEnemy(type,x,y);
 }
 function spawnEnemyFloor(){
-  const fl=state.floor, cap=10+fl*3;
+  const fl=state.floor, cap=18+fl*5;
   if(enemies.length>=cap || !state.drooms) return;
   const pool=state.drooms.filter(r=>r!==state.dbossRoom || state.bossesDead[fl]);
   if(!pool.length) return;
@@ -142,11 +167,19 @@ function populateFloor(){
   if(fl===0) return;
   const pool=(state.drooms||[]).filter(r=>r!==state.dbossRoom);
   if(!pool.length) return;
-  for(let i=0;i<8+fl*3;i++){
+  for(let i=0;i<12+fl*5;i++){
     const r=pick(pool);
     const x=(r.x+1+Math.random()*(r.w-2))*TS, y=(r.y+1+Math.random()*(r.h-2))*TS;
     const s=findFreeSpot(x,y,12);
     if(dist(s.x,s.y,player.x,player.y)<380) continue;
     makeEnemy(pick(SPAWNS[fl]),s.x,s.y);
+  }
+  // hidden-vault guardians (optional content — they never block the Ember Seal)
+  for(const v of (state.dvaults||[])){
+    for(let i=0;i<2+(fl>>1);i++){
+      const s=findFreeSpot((v.x+1.5+Math.random()*(v.w-3))*TS,
+                           (v.y+1.5+Math.random()*(v.h-3))*TS, 12);
+      makeEnemy(pick(SPAWNS[fl]),s.x,s.y,{elite:true,vaultGuard:true});
+    }
   }
 }

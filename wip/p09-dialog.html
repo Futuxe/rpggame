@@ -1,12 +1,52 @@
-/* ---------------- potions ---------------- */
-function drinkPotion(){
-  if(state.mode!=='play') return;
-  if(player.potions<=0){ addText(player.x,player.y-26,'No potions!','#ff9a9a'); sfx('denied'); return; }
-  if(player.hp>=player.maxHp){ addText(player.x,player.y-26,'Already at full health','#c9d1d9'); return; }
-  player.potions--; player.hp=Math.min(player.maxHp,player.hp+60);
-  addText(player.x,player.y-26,'+60 HP','#7ee787'); sfx('potion');
-  burst(player.x,player.y,'#7ee787',10,90,0.6,3);
+/* ---------------- potions & drinking (fortnite-style channel) ----------------
+   Every consumable must be DRUNK: a short channel during which you cannot
+   move. Taking a hit interrupts the drink and the item is not consumed.
+   Health flasks themselves only come from defeating guardians.             */
+const DRINKS={
+  potion:{time:1.6,label:'Health Flask',  color:'#ff7b8f'},
+  brew:  {time:2.2,label:'Strength Brew', color:'#ff9a3d'},
+  tonic: {time:2.2,label:'Swift Tonic',   color:'#7ee7ff'},
+};
+function drinkHave(kind){
+  return kind==='potion'?player.potions : kind==='brew'?player.brews : player.tonics;
 }
+function startDrink(kind){
+  if(state.mode!=='play' || state.cine || state.trans) return;
+  if(player.drinkKind) return;                       // already chugging
+  if(drinkHave(kind)<=0){
+    addText(player.x,player.y-26,'No '+DRINKS[kind].label+'s!','#ff9a9a'); sfx('denied'); return;
+  }
+  if(kind==='potion' && player.hp>=player.maxHp){
+    addText(player.x,player.y-26,'Already at full health','#c9d1d9'); return;
+  }
+  player.drinkKind=kind; player.drinkT=0; player.drinkMax=DRINKS[kind].time;
+  sfx('potion');
+  addText(player.x,player.y-26,'Drinking '+DRINKS[kind].label+'...','#c9d1d9',0.8);
+}
+function finishDrink(){
+  const kind=player.drinkKind; player.drinkKind=null;
+  if(kind==='potion'){
+    player.potions--; player.hp=Math.min(player.maxHp,player.hp+60);
+    addText(player.x,player.y-26,'+60 HP','#7ee787',1.2,true);
+    burst(player.x,player.y,'#7ee787',12,95,0.6,3);
+  } else if(kind==='brew'){
+    player.brews--; player.strT=45;
+    addText(player.x,player.y-26,'STRENGTH +45s','#ff9a3d',1.4,true);
+    burst(player.x,player.y,'#ff9a3d',14,110,0.7,3);
+  } else if(kind==='tonic'){
+    player.tonics--; player.spdT=45;
+    addText(player.x,player.y-26,'SWIFT +45s','#7ee7ff',1.4,true);
+    burst(player.x,player.y,'#7ee7ff',14,110,0.7,3);
+  }
+  sfx('reward');
+}
+function cancelDrink(reason){
+  if(!player.drinkKind) return;
+  player.drinkKind=null; sfx('denied');
+  if(reason) addText(player.x,player.y-30,reason,'#ff6b6b',1.2,true);
+}
+/* legacy alias */
+function drinkPotion(){ startDrink('potion'); }
 
 /* ---------------- NPCs / dialog ---------------- */
 function nearNPC(){
@@ -17,10 +57,10 @@ function openDialog(name,lines,options){
   state.dialog={name,lines,page:0,options:options||null};
 }
 const QUEST_CLAIM={
-  q1(){ player.gold+=100; player.potions+=2; return '+100 gold, +2 potions. The Depths await...'; },
-  q2(){ player.gold+=150; player.potions+=1; return '+150 gold, +1 potion. Sharpen your blade.'; },
+  q1(){ player.gold+=100; player.brews+=1; return '+100 gold, +1 Strength Brew. The Depths await...'; },
+  q2(){ player.gold+=150; player.tonics+=1; return '+150 gold, +1 Swift Tonic. The Depths yawn open below.'; },
   q3(){ player.gold+=200; player.armor+=1; return '+200 gold, +1 armor. The fires below grow hotter.'; },
-  q4(){ player.gold+=250; player.potions+=2; return '+250 gold, +2 potions. Ash storms brew on Floor 4.'; },
+  q4(){ player.gold+=250; player.brews+=1; return '+250 gold, +1 Strength Brew. Ash storms brew on Floor 4.'; },
   q5(){ player.gold+=150; return '+150 gold. Only one tyrant remains...'; },
   q6(){ player.gold+=400; player.swordBonus+=10; return '+400 gold, the EMBER BLADE is yours! (+10 dmg)'; },
 };
@@ -43,7 +83,7 @@ function elderDialog(){
     else {
       const msgs={
         q1:'The slimes still crawl... ('+q.prog+' / 8 slain)',
-        q2:'A stairway has opened at the heart of the corrupted wastes.',
+        q2:'Moul, the Corrupted Warden, prowls the wastes around the stairway. Slay it to break the seal.',
         q3:'The Bone King rules the first floor of the Depths.',
         q4:'Two fires remain: the Cinder Golem (F2) and Malachar (F3).',
         q5:'Pyrelord Vex storms the Ashen Deep (F4).',
@@ -85,12 +125,17 @@ function merchantDialog(){
   const swordPrice=120*Math.pow(2,player.swordLvl);
   const armorPrice=150*Math.pow(2,player.armorLvl);
   const lanternPrice=80*Math.pow(2,player.lightLvl);
+  const bowPrice=140*Math.pow(2,Math.max(0,player.bowLvl-1));
   openDialog('Finn the Trader',[
     'Psst! Finest wares in all of Emberfall — and the Depths below!',
     'You have '+player.gold+' gold.',
   ],[
-    {label:'Buy Health Potion — 25g',act(){
-      if(player.gold>=25){ player.gold-=25; player.potions++; sfx('buy'); addText(player.x,player.y-26,'+1 potion','#ff7b8f'); }
+    {label:'Strength Brew (45s) — 40g',act(){
+      if(player.gold>=40){ player.gold-=40; player.brews++; sfx('buy'); addText(player.x,player.y-26,'+1 Strength Brew','#ff9a3d'); }
+      else { sfx('denied'); addText(player.x,player.y-26,'Not enough gold!','#ff9a9a'); }
+      merchantDialog(); }},
+    {label:'Swift Tonic (45s) — 40g',act(){
+      if(player.gold>=40){ player.gold-=40; player.tonics++; sfx('buy'); addText(player.x,player.y-26,'+1 Swift Tonic','#7ee7ff'); }
       else { sfx('denied'); addText(player.x,player.y-26,'Not enough gold!','#ff9a9a'); }
       merchantDialog(); }},
     {label:'Sharpen Blade +8 dmg — '+swordPrice+'g',act(){
@@ -107,6 +152,20 @@ function merchantDialog(){
       if(player.lightLvl>=3){ sfx('denied'); addText(player.x,player.y-26,'Lantern already burning bright!','#c9d1d9'); }
       else if(player.gold>=lanternPrice){ player.gold-=lanternPrice; player.lightLvl++; sfx('buy');
         addText(player.x,player.y-26,'Lantern upgraded! You see further in the dark.','#ffe08a'); }
+      else { sfx('denied'); addText(player.x,player.y-26,'Not enough gold!','#ff9a9a'); }
+      merchantDialog(); }},
+    {label:player.bow?'Reinforce Bow +5 dmg — '+bowPrice+'g':'Buy Bow + 15 arrows — 180g',act(){
+      if(!player.bow){
+        if(player.gold>=180){ player.gold-=180; player.bow=true; player.bowLvl=1; player.arrows+=15;
+          player.weapon='bow'; sfx('buy'); addText(player.x,player.y-26,'Bow acquired! Press R to swap','#ffe08a',2.4,true); }
+        else { sfx('denied'); addText(player.x,player.y-26,'Not enough gold!','#ff9a9a'); }
+      } else if(player.gold>=bowPrice){ player.gold-=bowPrice; player.bowLvl++; sfx('buy');
+        addText(player.x,player.y-26,'Bow reinforced!','#ffe08a'); }
+      else { sfx('denied'); addText(player.x,player.y-26,'Not enough gold!','#ff9a9a'); }
+      merchantDialog(); }},
+    {label:'Arrows x20 — 30g',act(){
+      if(player.gold>=30){ player.gold-=30; player.arrows+=20; sfx('buy');
+        addText(player.x,player.y-26,'+20 arrows','#e8e2d0'); }
       else { sfx('denied'); addText(player.x,player.y-26,'Not enough gold!','#ff9a9a'); }
       merchantDialog(); }},
     {label:'Leave',act(){ state.dialog=null; }},

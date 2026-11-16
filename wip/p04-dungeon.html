@@ -1,6 +1,6 @@
 /* ---------- dungeon generation (rooms + corridors + arenas) ---------- */
 function genDungeon(fl){
-  mapW=52+fl*10; mapH=52+fl*10;
+  mapW=160+fl*40; mapH=160+fl*40;
   tiles=new Uint8Array(mapW*mapH); tiles.fill(T_WALL);
   tileVar=new Float32Array(mapW*mapH);
   trees=[]; treeGrid=new Map(); rocks=[]; flowers=[]; torches=[]; chests=[]; buildings=[]; props=[]; shrines=[]; lavas=[]; entrance=null; returnPortal=null;
@@ -10,10 +10,10 @@ function genDungeon(fl){
       if(x < r.x+r.w+3 && x+w+3 > r.x && y < r.y+r.h+3 && y+h+3 > r.y) return true;
     return false;
   };
-  const nRooms = 8+fl*2;
+  const nRooms = 14+fl*4;
   let tries=0;
-  while(rooms.length<nRooms && tries++<500){
-    const w=6+((Math.random()*7)|0), h=5+((Math.random()*6)|0);
+  while(rooms.length<nRooms && tries++<900){
+    const w=7+((Math.random()*8)|0), h=6+((Math.random()*7)|0);
     const x=2+((Math.random()*(mapW-w-4))|0), y=2+((Math.random()*(mapH-h-4))|0);
     if(overlap(x,y,w,h)) continue;
     rooms.push({x,y,w,h,cx:(x+w/2)|0,cy:(y+h/2)|0});
@@ -29,7 +29,7 @@ function genDungeon(fl){
   for(const r of rooms)
     for(let dy=0;dy<r.h;dy++)for(let dx=0;dx<r.w;dx++) carve(r.x+dx,r.y+dy);
   /* --- boss arena (every floor has a guardian) --- */
-  const bw=fl===5?22:18, bh=fl===5?15:12;
+  const bw=fl===5?26:20, bh=fl===5?17:13;
   let bx=(mapW-bw)/2|0, by=(mapH-bh)/2|0;
   for(let t=0;t<120;t++){
     const nx=2+((Math.random()*(mapW-bw-4))|0), ny=2+((Math.random()*(mapH-bh-4))|0);
@@ -52,6 +52,76 @@ function genDungeon(fl){
   while(x!==bossRoom.cx){ carve(x,y); carve(x,y+1); x+= x<bossRoom.cx?1:-1; }
   while(y!==bossRoom.cy){ carve(x,y); carve(x+1,y); y+= y<bossRoom.cy?1:-1; }
   rooms.push(bossRoom);
+  /* --- Ember Seal: every floor tile in the ring just outside the arena
+         becomes wall until the floor's enemies are cleared (SkyBlock-style) --- */
+  state.sealTiles=[];
+  if(!(state.bossesDead&&state.bossesDead[fl])){
+    for(let dy=-1;dy<=bh;dy++)for(let dx=-1;dx<=bw;dx++){
+      const edge = dx<0||dy<0||dx>=bw||dy>=bh;
+      if(!edge) continue;
+      const tx=bx+dx, ty=by+dy;
+      if(tileAt(tx,ty)===T_FLOOR){
+        setTile(tx,ty,T_WALL);
+        state.sealTiles.push(tx+','+ty);
+      }
+    }
+  }
+  state.sealSet=new Set(state.sealTiles);
+  state.sealOpen=state.sealTiles.length===0;
+  /* --- hidden vaults (Doors-style secret subrooms) ---
+     A small treasure room is carved far from the map's rooms, connected by a
+     corridor, and every opening is sealed with bare wall except a single
+     cracked T_SECRET tile. The player must press E beside the crack to break
+     in. Vault guards and the relic chest live inside. --- */
+  state.dvaults=[];
+  const rectClear=(x,y,w,h)=>{
+    for(const r of rooms)
+      if(x < r.x+r.w+4 && x+w+4 > r.x && y < r.y+r.h+4 && y+h+4 > r.y) return false;
+    for(const v of state.dvaults)
+      if(x < v.x+v.w+4 && x+w+4 > v.x && y < v.y+v.h+4 && y+h+4 > v.y) return false;
+    return true;
+  };
+  const nVaults = fl>=4?2:1;
+  for(let vi=0; vi<nVaults; vi++){
+    const vw=9, vh=7;
+    let vx=-1, vy=-1;
+    for(let t=0;t<500;t++){
+      const nx=4+((Math.random()*(mapW-vw-8))|0), ny=4+((Math.random()*(mapH-vh-8))|0);
+      if(rectClear(nx,ny,vw,vh)){ vx=nx; vy=ny; break; }
+    }
+    if(vx<0) continue;
+    for(let dy=0;dy<vh;dy++)for(let dx=0;dx<vw;dx++) carve(vx+dx,vy+dy);
+    const cx=vx+(vw>>1), cy=vy+(vh>>1);
+    let nr2=rooms[0], nd2=1e9;
+    for(const r of rooms){
+      if(r===bossRoom) continue;
+      const d=dist(r.cx,r.cy,cx,cy);
+      if(d<nd2){ nd2=d; nr2=r; }
+    }
+    let x2=nr2.cx, y2=nr2.cy;
+    while(x2!==cx){ carve(x2,y2); carve(x2,y2+1); x2 += x2<cx?1:-1; }
+    while(y2!==cy){ carve(x2,y2); carve(x2+1,y2); y2 += y2<cy?1:-1; }
+    // seal all perimeter openings except one — that one becomes a secret crack
+    const perim=[];
+    for(let dx=-1;dx<=vw;dx++){ perim.push([vx+dx,vy-1],[vx+dx,vy+vh]); }
+    for(let dy=0;dy<vh;dy++){ perim.push([vx-1,vy+dy],[vx+vw,vy+dy]); }
+    let door=null, dbest=1e9;
+    for(const [tx2,ty2] of perim){
+      if(tileAt(tx2,ty2)===T_WALL) continue;
+      const dd=dist(tx2,ty2,nr2.cx,nr2.cy);
+      if(dd<dbest){ dbest=dd; door=[tx2,ty2]; }
+    }
+    for(const [tx2,ty2] of perim){
+      if(tileAt(tx2,ty2)===T_WALL) continue;
+      setTile(tx2,ty2, (door && tx2===door[0] && ty2===door[1]) ? T_SECRET : T_WALL);
+    }
+    if(!door) setTile(cx,vy-1,T_SECRET);
+    const id='v'+fl+':'+cx+','+cy;
+    state.dvaults.push({x:vx,y:vy,w:vw,h:vh,cx,cy,id,seen:false});
+    if(!chests.some(c=>c.id===id))
+      chests.push({x:cx*TS+TS/2, y:cy*TS+TS/2,
+        opened:!!(state.openedChests&&state.openedChests.has(id)), id, vault:true});
+  }
   /* --- variation + lava tile list --- */
   for(let i=0;i<tiles.length;i++) tileVar[i]=hash2(i*1.37,i*0.71);
   for(let i=0;i<tiles.length;i++)
@@ -91,8 +161,9 @@ function genDungeon(fl){
   }
   /* --- chests --- */
   const chestRooms=others.filter(r=>r!==downRoom);
-  for(let i=0;i<2+fl && chestRooms.length;i++){
-    const r=pick(chestRooms);
+  for(let i=0;i<4+fl*2 && chestRooms.length;i++){
+    const idx=(Math.random()*chestRooms.length)|0;
+    const r=chestRooms.splice(idx,1)[0];
     const id=fl+':'+r.cx+','+r.cy;
     if(chests.some(c=>c.id===id)) continue;
     chests.push({x:r.cx*TS+TS/2+rnd(-22,22), y:r.cy*TS+TS/2+rnd(-14,14),

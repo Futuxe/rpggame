@@ -10,8 +10,14 @@ function toSurface(reason){
 }
 function descend(){
   if(state.floor>=MAXFLOOR) return;
+  if(state.floor===0 && !state.flags.warden){
+    sfx('denied'); shake(0.3,4);
+    addText(player.x,player.y-40,'A corrupted seal bars the stairway...','#c46bff',2.8,true);
+    addText(player.x,player.y-64,'Slay MOUL, the WARDEN that stalks these wastes!','#ff8a5e',2.8,true);
+    return;
+  }
   sfx('stairs');
-  state.flags.descended=true; readyIf('q2');
+  state.flags.descended=true;
   startTransition(()=>{
     state.floor++;
     state.boss=null;
@@ -20,17 +26,21 @@ function descend(){
     populateFloor(); buildMinimap();
     cam.x=player.x-VW/2; cam.y=player.y-VH/2;
     sfx('quest');
+    state.cine={t:0,dur:2.9,head:'EMBERFALL DUNGEONS',title:'FLOOR '+state.floor,sub:FLNAMES[state.floor]};
     addText(player.x,player.y-46,'Floor '+state.floor+' — '+FLNAMES[state.floor],'#ff8a5e',3,true);
     if(state.bossesDead[state.floor])
       addText(player.x,player.y-70,'Its guardian already lies slain.','#c9d1d9',2.5,true);
   });
-  if(state.quest.id==='q2' && state.quest.state==='active'){ state.flags.descended=true; readyIf('q2'); }
 }
 function ascend(){
   if(state.floor<=0) return;
   sfx('stairs');
   startTransition(()=>{
-    if(state.floor===1){ state.boss=null; toSurface('You climb back to Emberfall — Surface'); }
+    if(state.floor===1){
+      state.boss=null;
+      toSurface('You climb back to Emberfall — Surface');
+      state.cine={t:0,dur:2.4,head:'EMBERFALL',title:'THE SURFACE',sub:'Emberfall Village'};
+    }
     else {
       state.floor--;
       state.boss=null;
@@ -38,6 +48,7 @@ function ascend(){
       player.x=state.dstart.x; player.y=state.dstart.y;
       populateFloor(); buildMinimap();
       cam.x=player.x-VW/2; cam.y=player.y-VH/2;
+      state.cine={t:0,dur:2.4,head:'EMBERFALL DUNGEONS',title:'FLOOR '+state.floor,sub:FLNAMES[state.floor]};
       addText(player.x,player.y-46,'Floor '+state.floor+' — '+FLNAMES[state.floor],'#ff8a5e',2.5,true);
     }
   });
@@ -48,8 +59,17 @@ function openChest(c){
   burst(c.x,c.y,'#ffd75e',20,150,0.8,3.5);
   const n=4+((Math.random()*4)|0);
   for(let i=0;i<n;i++) drops.push({type:'coin',x:c.x+rnd(-14,14),y:c.y+rnd(-14,14),val:Math.ceil(rnd(2,6)),t:rnd(TAU),vx:rnd(-60,60),vy:rnd(-60,60)});
-  if(Math.random()<0.4) drops.push({type:'potion',x:c.x,y:c.y-6,t:rnd(TAU),vx:0,vy:0});
-  if(Math.random()<0.35) for(let i=0;i<2;i++) drops.push({type:'gem',x:c.x+rnd(-10,10),y:c.y+rnd(-10,10),val:Math.ceil(rnd(20,50)),t:rnd(TAU),vx:rnd(-40,40),vy:rnd(-40,40)});
+  if(Math.random()<0.4) drops.push({type:'gem',x:c.x+rnd(-10,10),y:c.y+rnd(-10,10),val:Math.ceil(rnd(20,50)),t:rnd(TAU),vx:rnd(-40,40),vy:rnd(-40,40)});
+  if(Math.random()<0.35) drops.push({type:'arrows',x:c.x+rnd(-10,10),y:c.y+rnd(-10,10),val:5+((Math.random()*6)|0),t:rnd(TAU),vx:rnd(-30,30),vy:rnd(-30,30)});
+  if(c.vault){
+    addText(c.x,c.y-30,'RELIC VAULT LOOT!','#ffd75e',2.8,true);
+    sfx('reward');
+    for(let i=0;i<6;i++) drops.push({type:'gem',x:c.x+rnd(-18,18),y:c.y+rnd(-18,18),val:Math.ceil(rnd(60,130)),t:rnd(TAU),vx:rnd(-50,50),vy:rnd(-50,50)});
+    drops.push({type:'arrows',x:c.x,y:c.y-8,val:14,t:rnd(TAU),vx:0,vy:0});
+    // vault chests can hold a brew or tonic (never a health flask — guardians only)
+    drops.push({type:Math.random()<0.5?'brew':'tonic',x:c.x+rnd(-12,12),y:c.y+rnd(-8,8),t:rnd(TAU),vx:0,vy:0});
+    burst(c.x,c.y,'#c46bff',34,190,1,4);
+  }
 }
 function activateShrine(s){
   s.active=true;
@@ -89,9 +109,34 @@ function interact(){
   }
   if(sd==='down' && state.floor<MAXFLOOR){ descend(); return; }
   if(sd==='up' && state.floor>0){ ascend(); return; }
+  // cracked secret walls: press E beside one to break into a hidden vault
+  for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){
+    if((dx||dy) && tileAt(ptx+dx,pty+dy)===T_SECRET){
+      setTile(ptx+dx,pty+dy,T_FLOOR);
+      const wx=(ptx+dx)*TS+TS/2, wy=(pty+dy)*TS+TS/2;
+      sfx('slam'); shake(0.4,6);
+      burst(wx,wy,'#c46bff',28,160,0.9,3.5);
+      addText(player.x,player.y-50,'A secret passage opens...','#c46bff',2.8,true);
+      buildMinimap();
+      return;
+    }
+  }
   for(const c of chests)
     if(!c.opened && dist(c.x,c.y,player.x,player.y)<38){ openChest(c); return; }
   for(const s of shrines)
     if(!s.active && !s.done && dist(s.x,s.y,player.x,player.y)<46){ activateShrine(s); return; }
+  // ancient biome altars: wake the hidden guardian (defeat it for its power)
+  for(const a of state.biomeAltars)
+    if(dist(a.x,a.y,player.x,player.y)<56){
+      if(a.done){ addText(player.x,player.y-40,'This guardian already kneels.','#c9d1d9',1.8,true); return; }
+      if(state.boss){ addText(player.x,player.y-40,'A duel is already underway!','#ff9a9a',1.6,true); return; }
+      const s=findFreeSpot(a.x+rnd(-70,70),a.y+rnd(60,110),24);
+      spawnBoss(a.boss,s.x,s.y);
+      state.boss.biomeId=a.biome;
+      burst(a.x,a.y-10,a.accent,36,200,1,4);
+      addText(a.x,a.y-64,a.guardian+' STIRS...','#ffd75e',3,true);
+      addText(player.x,player.y-40,'Slay it to claim its ancient power!','#ff8a5e',3,true);
+      return;
+    }
   if(state.portal && dist(state.portal.x,state.portal.y,player.x,player.y)<52){ usePortal(); return; }
 }

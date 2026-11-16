@@ -1,43 +1,397 @@
 /* ---------------- rendering: world ---------------- */
 const THEMES={
-  1:{bg:'#141210', wall:'#4a443c', wallTop:'#61584a', floor:'#34302b', floorHi:'#3f3a33', fog:'rgba(8,7,10,0.88)'},
-  2:{bg:'#180f0d', wall:'#3a2d31', wallTop:'#523f44', floor:'#2c2325', floorHi:'#382c2f', fog:'rgba(16,4,4,0.86)'},
-  3:{bg:'#120e18', wall:'#332a44', wallTop:'#493c63', floor:'#251f31', floorHi:'#302842', fog:'rgba(10,6,18,0.88)'},
-  4:{bg:'#171310', wall:'#3d342c', wallTop:'#54483b', floor:'#2a2521', floorHi:'#352f28', fog:'rgba(14,10,8,0.86)'},
-  5:{bg:'#140b09', wall:'#41292a', wallTop:'#583c3e', floor:'#2b1d1d', floorHi:'#372727', fog:'rgba(18,6,4,0.88)'},
+  1:{bg:'#0d0c0a', wall:'#4a443c', wallTop:'#61584a', floor:'#34302b', floorHi:'#3f3a33', fog:'rgba(6,5,8,0.94)'},
+  2:{bg:'#120a08', wall:'#3a2d31', wallTop:'#523f44', floor:'#2c2325', floorHi:'#382c2f', fog:'rgba(11,3,3,0.94)'},
+  3:{bg:'#0b0810', wall:'#332a44', wallTop:'#493c63', floor:'#251f31', floorHi:'#302842', fog:'rgba(7,4,14,0.94)'},
+  4:{bg:'#100d0a', wall:'#3d342c', wallTop:'#54483b', floor:'#2a2521', floorHi:'#352f28', fog:'rgba(9,6,4,0.94)'},
+  5:{bg:'#0e0705', wall:'#41292a', wallTop:'#583c3e', floor:'#2b1d1d', floorHi:'#372727', fog:'rgba(13,3,2,0.95)'},
 };
+
+/* ---------- procedural material textures ----------
+   Every material is painted once into a 128x128 canvas at load time:
+   per-pixel grain, block/slab bevels, mortar, mineral flecks, cracks and
+   damp staining. The result is used as a world-anchored repeating pattern,
+   so the stonework stays glued to the floor as the camera moves.          */
+const TEXN=128;
+function texRGB(hex){
+  hex=hex.replace('#','');
+  if(hex.length===3) hex=hex.split('').map(c=>c+c).join('');
+  return [parseInt(hex.slice(0,2),16),parseInt(hex.slice(2,4),16),parseInt(hex.slice(4,6),16)];
+}
+function makeWallTex(th){
+  const cv=document.createElement('canvas'); cv.width=cv.height=TEXN;
+  const g=cv.getContext('2d');
+  const base=texRGB(th.wall);
+  const img=g.createImageData(TEXN,TEXN), d=img.data;
+  for(let y=0;y<TEXN;y++)for(let x=0;x<TEXN;x++){
+    const row=(y/32)|0, ox=(row%2)?32:0;
+    const bx=(x+ox)%64, by=y%32;
+    const mortar=bx<2||by<2;
+    const bevel=mortar?0:(bx<4||by<4)?13:(bx>60||by>28)?-11:0;
+    const mott=Math.sin((x+row*17)*0.098)*0.5+Math.sin((y-row*11)*0.071)*0.5;
+    const grain=(Math.random()-0.5)*20;
+    let r=base[0]+grain+mott*9+bevel;
+    let gg=base[1]+grain+mott*8+bevel;
+    let b=base[2]+grain+mott*7+bevel;
+    if(mortar){ r*=0.52; gg*=0.52; b*=0.52; }
+    if(!mortar && by>24){ r-=6; gg+=2; b-=7; }               // damp foot of each block
+    if(!mortar && Math.random()<0.012){ r+=34; gg+=30; b+=24; } // mineral flecks
+    if(!mortar && Math.random()<0.008){ r-=28; gg-=28; b-=28; } // pitting
+    const i=(y*TEXN+x)*4;
+    d[i]=clamp(r,0,255); d[i+1]=clamp(gg,0,255); d[i+2]=clamp(b,0,255); d[i+3]=255;
+  }
+  g.putImageData(img,0,0);
+  // chiselled bevel highlights along block tops/lefts
+  g.fillStyle='rgba(255,255,255,0.075)';
+  for(let row=0;row<4;row++){
+    const oy=row*32, ox=(row%2)?32:0;
+    for(let col=-1;col<3;col++){
+      const bx=col*64+ox;
+      g.fillRect(bx+2,oy+2,60,2);
+      g.fillRect(bx+2,oy+2,2,28);
+    }
+  }
+  // hairline cracks
+  for(let i=0;i<7;i++){
+    let x=Math.random()*TEXN, y=Math.random()*TEXN;
+    g.strokeStyle='rgba(0,0,0,0.32)'; g.lineWidth=1;
+    g.beginPath(); g.moveTo(x,y);
+    for(let s=0;s<9;s++){ x+=(Math.random()-0.5)*13; y+=(Math.random()-0.25)*7; g.lineTo(x,y); }
+    g.stroke();
+  }
+  // damp / moss pooling
+  for(let i=0;i<7;i++){
+    const x=Math.random()*TEXN, y=Math.random()*TEXN, r=10+Math.random()*26;
+    const gr=g.createRadialGradient(x,y,1,x,y,r);
+    gr.addColorStop(0,'rgba(14,20,10,0.20)'); gr.addColorStop(1,'rgba(0,0,0,0)');
+    g.fillStyle=gr; g.beginPath(); g.arc(x,y,r,0,TAU); g.fill();
+  }
+  return cv;
+}
+function makeFloorTex(th){
+  const cv=document.createElement('canvas'); cv.width=cv.height=TEXN;
+  const g=cv.getContext('2d');
+  const base=texRGB(th.floor), hi=texRGB(th.floorHi);
+  const img=g.createImageData(TEXN,TEXN), d=img.data;
+  for(let y=0;y<TEXN;y++)for(let x=0;x<TEXN;x++){
+    const sx=x%64, sy=y%64;
+    const mortar=sx<2||sy<2;
+    const slab=((x/64)|0)+((y/64)|0)*2;
+    const sv=((slab*37)%13)/13-0.5;
+    const mott=Math.sin(x*0.147+slab)*0.5+Math.sin(y*0.113-slab*1.7)*0.5;
+    const grain=(Math.random()-0.5)*16;
+    let r=base[0]+sv*12+grain+mott*5;
+    let gg=base[1]+sv*12+grain+mott*5;
+    let b=base[2]+sv*12+grain+mott*4;
+    if(mortar){ r=r*0.5+hi[0]*0.10; gg=gg*0.5+hi[1]*0.10; b=b*0.5+hi[2]*0.10; }
+    else if(sx<5||sy<5){ r+=10; gg+=10; b+=9; }               // worn bevel
+    else if(sx>59||sy>59){ r-=9; gg-=9; b-=8; }
+    if(!mortar && Math.random()<0.010){ r+=20; gg+=19; b+=16; } // grit
+    if(!mortar && Math.random()<0.006){ r-=18; gg-=18; b-=18; }
+    const i=(y*TEXN+x)*4;
+    d[i]=clamp(r,0,255); d[i+1]=clamp(gg,0,255); d[i+2]=clamp(b,0,255); d[i+3]=255;
+  }
+  g.putImageData(img,0,0);
+  // slab cracks and wear arcs
+  for(let i=0;i<6;i++){
+    let x=Math.random()*TEXN, y=Math.random()*TEXN;
+    g.strokeStyle='rgba(0,0,0,0.24)'; g.lineWidth=1;
+    g.beginPath(); g.moveTo(x,y);
+    for(let s=0;s<7;s++){ x+=(Math.random()-0.5)*16; y+=(Math.random()-0.5)*11; g.lineTo(x,y); }
+    g.stroke();
+  }
+  // dust drifts
+  for(let i=0;i<5;i++){
+    const x=Math.random()*TEXN, y=Math.random()*TEXN, r=14+Math.random()*22;
+    const gr=g.createRadialGradient(x,y,1,x,y,r);
+    gr.addColorStop(0,'rgba(210,200,180,0.06)'); gr.addColorStop(1,'rgba(0,0,0,0)');
+    g.fillStyle=gr; g.beginPath(); g.arc(x,y,r,0,TAU); g.fill();
+  }
+  return cv;
+}
+function makeGrassTex(){
+  const cv=document.createElement('canvas'); cv.width=cv.height=TEXN;
+  const g=cv.getContext('2d');
+  const img=g.createImageData(TEXN,TEXN), d=img.data;
+  for(let y=0;y<TEXN;y++)for(let x=0;x<TEXN;x++){
+    const mott=Math.sin(x*0.098)*0.5+Math.sin(y*0.147+1.3)*0.5+Math.sin((x+y)*0.049)*0.5;
+    const grain=(Math.random()-0.5)*20;
+    const i=(y*TEXN+x)*4;
+    d[i]=clamp(54+grain+mott*15,0,255);
+    d[i+1]=clamp(142+grain+mott*22,0,255);
+    d[i+2]=clamp(58+grain+mott*12,0,255);
+    d[i+3]=255;
+  }
+  g.putImageData(img,0,0);
+  // blades
+  for(let i=0;i<520;i++){
+    const x=Math.random()*TEXN, y=Math.random()*TEXN, h=3+Math.random()*7;
+    g.strokeStyle=`rgba(${30+Math.random()*40|0},${120+Math.random()*70|0},${40+Math.random()*30|0},0.55)`;
+    g.lineWidth=1;
+    g.beginPath(); g.moveTo(x,y); g.lineTo(x+(Math.random()-0.5)*3,y-h); g.stroke();
+  }
+  // dirt patches
+  for(let i=0;i<8;i++){
+    const x=Math.random()*TEXN, y=Math.random()*TEXN, r=8+Math.random()*20;
+    const gr=g.createRadialGradient(x,y,1,x,y,r);
+    gr.addColorStop(0,'rgba(92,72,44,0.18)'); gr.addColorStop(1,'rgba(0,0,0,0)');
+    g.fillStyle=gr; g.beginPath(); g.arc(x,y,r,0,TAU); g.fill();
+  }
+  return cv;
+}
+function makeCorruptTex(){
+  const cv=document.createElement('canvas'); cv.width=cv.height=TEXN;
+  const g=cv.getContext('2d');
+  const img=g.createImageData(TEXN,TEXN), d=img.data;
+  for(let y=0;y<TEXN;y++)for(let x=0;x<TEXN;x++){
+    const mott=Math.sin(x*0.147+2.1)*0.5+Math.sin(y*0.098-1.4)*0.5+Math.sin((x-y)*0.074)*0.5;
+    const grain=(Math.random()-0.5)*22;
+    const i=(y*TEXN+x)*4;
+    d[i]=clamp(66+grain+mott*18,0,255);
+    d[i+1]=clamp(40+grain+mott*10,0,255);
+    d[i+2]=clamp(68+grain+mott*22,0,255);
+    d[i+3]=255;
+  }
+  g.putImageData(img,0,0);
+  // glowing ember veins
+  for(let i=0;i<9;i++){
+    let x=Math.random()*TEXN, y=Math.random()*TEXN;
+    g.strokeStyle=`rgba(255,${100+Math.random()*80|0},50,${0.16+Math.random()*0.25})`;
+    g.lineWidth=1.4;
+    g.beginPath(); g.moveTo(x,y);
+    for(let s=0;s<8;s++){ x+=(Math.random()-0.5)*18; y+=(Math.random()-0.5)*14; g.lineTo(x,y); }
+    g.stroke();
+  }
+  // ash flecks
+  for(let i=0;i<60;i++){
+    g.fillStyle='rgba(230,215,235,0.25)';
+    g.fillRect(Math.random()*TEXN,Math.random()*TEXN,1.5,1.5);
+  }
+  return cv;
+}
+function makeSandTex(){
+  const cv=document.createElement('canvas'); cv.width=cv.height=TEXN;
+  const g=cv.getContext('2d');
+  const img=g.createImageData(TEXN,TEXN), d=img.data;
+  for(let y=0;y<TEXN;y++)for(let x=0;x<TEXN;x++){
+    const ripple=Math.sin(x*0.19635+Math.sin(y*0.098)*1.6)*0.5+Math.sin(y*0.3927)*0.5;
+    const grain=(Math.random()-0.5)*18;
+    const i=(y*TEXN+x)*4;
+    d[i]=clamp(214+grain+ripple*12,0,255);
+    d[i+1]=clamp(198+grain+ripple*10,0,255);
+    d[i+2]=clamp(144+grain+ripple*8,0,255);
+    d[i+3]=255;
+  }
+  g.putImageData(img,0,0);
+  for(let i=0;i<90;i++){
+    g.fillStyle=Math.random()<0.5?'rgba(120,100,60,0.3)':'rgba(255,248,220,0.3)';
+    g.fillRect(Math.random()*TEXN,Math.random()*TEXN,1.5,1.5);
+  }
+  return cv;
+}
+function makeSnowTex(){
+  const cv=document.createElement('canvas'); cv.width=cv.height=TEXN;
+  const g=cv.getContext('2d');
+  const img=g.createImageData(TEXN,TEXN), d=img.data;
+  for(let y=0;y<TEXN;y++)for(let x=0;x<TEXN;x++){
+    const drift=Math.sin(x*0.082+Math.sin(y*0.06)*1.8)*0.5+Math.sin(y*0.147)*0.5;
+    const grain=(Math.random()-0.5)*14;
+    const i=(y*TEXN+x)*4;
+    d[i]=clamp(212+grain+drift*10,0,255);
+    d[i+1]=clamp(226+grain+drift*9,0,255);
+    d[i+2]=clamp(240+grain*0.6+drift*8,0,255);
+    d[i+3]=255;
+  }
+  g.putImageData(img,0,0);
+  // wind-carved sparkles + faint blue shadows
+  for(let i=0;i<46;i++){
+    g.fillStyle='rgba(255,255,255,0.6)';
+    g.fillRect(Math.random()*TEXN,Math.random()*TEXN,1.4,1.4);
+  }
+  for(let i=0;i<10;i++){
+    const x=Math.random()*TEXN,y=Math.random()*TEXN,r=10+Math.random()*24;
+    const gr=g.createRadialGradient(x,y,1,x,y,r);
+    gr.addColorStop(0,'rgba(150,190,230,0.14)'); gr.addColorStop(1,'rgba(0,0,0,0)');
+    g.fillStyle=gr; g.beginPath(); g.arc(x,y,r,0,TAU); g.fill();
+  }
+  return cv;
+}
+function makeMarshTex(){
+  const cv=document.createElement('canvas'); cv.width=cv.height=TEXN;
+  const g=cv.getContext('2d');
+  const img=g.createImageData(TEXN,TEXN), d=img.data;
+  for(let y=0;y<TEXN;y++)for(let x=0;x<TEXN;x++){
+    const mott=Math.sin(x*0.118+1.7)*0.5+Math.sin(y*0.09-0.6)*0.5+Math.sin((x-y)*0.066)*0.5;
+    const grain=(Math.random()-0.5)*18;
+    const i=(y*TEXN+x)*4;
+    d[i]=clamp(58+grain+mott*10,0,255);
+    d[i+1]=clamp(84+grain+mott*16,0,255);
+    d[i+2]=clamp(56+grain+mott*8,0,255);
+    d[i+3]=255;
+  }
+  g.putImageData(img,0,0);
+  // stagnant pools
+  for(let i=0;i<9;i++){
+    const x=Math.random()*TEXN,y=Math.random()*TEXN,r=6+Math.random()*16;
+    g.fillStyle='rgba(28,52,44,0.5)';
+    g.beginPath(); g.ellipse(x,y,r,r*0.6,rnd(TAU),0,TAU); g.fill();
+  }
+  // reeds
+  for(let i=0;i<120;i++){
+    const x=Math.random()*TEXN,y=Math.random()*TEXN,h=3+Math.random()*6;
+    g.strokeStyle='rgba(30,58,30,0.55)'; g.lineWidth=1;
+    g.beginPath(); g.moveTo(x,y); g.lineTo(x+(Math.random()-0.5)*4,y-h); g.stroke();
+  }
+  return cv;
+}
+function makeCrystalTex(){
+  const cv=document.createElement('canvas'); cv.width=cv.height=TEXN;
+  const g=cv.getContext('2d');
+  const img=g.createImageData(TEXN,TEXN), d=img.data;
+  for(let y=0;y<TEXN;y++)for(let x=0;x<TEXN;x++){
+    const mott=Math.sin(x*0.09+2.4)*0.5+Math.sin(y*0.126+0.8)*0.5+Math.sin((x+y)*0.052)*0.5;
+    const grain=(Math.random()-0.5)*16;
+    const i=(y*TEXN+x)*4;
+    d[i]=clamp(112+grain+mott*14,0,255);
+    d[i+1]=clamp(100+grain+mott*13,0,255);
+    d[i+2]=clamp(172+grain+mott*18,0,255);
+    d[i+3]=255;
+  }
+  g.putImageData(img,0,0);
+  // faceted crystal shards
+  for(let i=0;i<16;i++){
+    const x=Math.random()*TEXN,y=Math.random()*TEXN,s=3+Math.random()*7;
+    g.fillStyle=`rgba(${190+Math.random()*50|0},${160+Math.random()*40|0},255,${0.25+Math.random()*0.3})`;
+    g.beginPath();
+    g.moveTo(x,y-s); g.lineTo(x+s*0.8,y); g.lineTo(x,y+s*0.7); g.lineTo(x-s*0.8,y);
+    g.closePath(); g.fill();
+  }
+  return cv;
+}
+function makeDuneTex(){
+  const cv=document.createElement('canvas'); cv.width=cv.height=TEXN;
+  const g=cv.getContext('2d');
+  const img=g.createImageData(TEXN,TEXN), d=img.data;
+  for(let y=0;y<TEXN;y++)for(let x=0;x<TEXN;x++){
+    const ripple=Math.sin(x*0.147+Math.sin(y*0.049)*2.4)*0.5+Math.sin((x+y)*0.052)*0.5;
+    const grain=(Math.random()-0.5)*16;
+    const i=(y*TEXN+x)*4;
+    d[i]=clamp(196+grain+ripple*16,0,255);
+    d[i+1]=clamp(138+grain+ripple*11,0,255);
+    d[i+2]=clamp(76+grain+ripple*7,0,255);
+    d[i+3]=255;
+  }
+  g.putImageData(img,0,0);
+  for(let i=0;i<70;i++){
+    g.fillStyle=Math.random()<0.5?'rgba(120,60,30,0.28)':'rgba(255,220,160,0.28)';
+    g.fillRect(Math.random()*TEXN,Math.random()*TEXN,1.5,1.5);
+  }
+  return cv;
+}
+const texCache=new Map();
+function texPattern(key,make){
+  let t=texCache.get(key);
+  if(!t){ t={cv:make()}; texCache.set(key,t); }
+  if(!t.pat) t.pat=ctx.createPattern(t.cv,'repeat');
+  return t.pat;
+}
+function anchorPat(p){
+  try{ p.setTransform(new DOMMatrix([1,0,0,1,-(cam.x%TEXN),-(cam.y%TEXN)])); }catch(e){}
+  return p;
+}
+function wallPat(th){
+  const fl=state.floor;
+  return anchorPat(texPattern('w'+fl,()=>makeWallTex(th)));
+}
+function floorPat(th){
+  const fl=state.floor;
+  return anchorPat(texPattern('f'+fl,()=>makeFloorTex(th)));
+}
+function surfacePat(name){
+  const maker = name==='grass'?makeGrassTex : name==='corrupt'?makeCorruptTex :
+                name==='snow'?makeSnowTex : name==='marsh'?makeMarshTex :
+                name==='crystal'?makeCrystalTex : name==='dune'?makeDuneTex : makeSandTex;
+  return anchorPat(texPattern('s'+name,maker));
+}
+
 function drawTiles(){
   const x0=Math.max(0,Math.floor(cam.x/TS)), x1=Math.min(mapW-1,Math.floor((cam.x+VW)/TS));
   const y0=Math.max(0,Math.floor(cam.y/TS)), y1=Math.min(mapH-1,Math.floor((cam.y+VH)/TS));
   const t=state.time;
   if(state.floor>0){
     const th=THEMES[state.floor];
+    const sealSet=state.sealSet;
+    const sealOn=!!(sealSet && sealSet.size && !state.sealOpen);
+    const wp=wallPat(th), fp=floorPat(th);
     for(let ty=y0;ty<=y1;ty++)for(let tx=x0;tx<=x1;tx++){
       const tl=tiles[ty*mapW+tx], v=tileVar[ty*mapW+tx];
       const px=tx*TS-cam.x, py=ty*TS-cam.y;
-      if(tl===T_WALL){
-        ctx.fillStyle=th.wall; ctx.fillRect(px,py,TS,TS);
-        ctx.strokeStyle='rgba(0,0,0,0.3)'; ctx.lineWidth=1;
-        ctx.beginPath();
-        ctx.moveTo(px,py+11); ctx.lineTo(px+TS,py+11);
-        ctx.moveTo(px,py+22); ctx.lineTo(px+TS,py+22);
-        const j1=(hash2(tx,ty)*TS)|0, j2=(hash2(ty,tx)*TS)|0;
-        ctx.moveTo(px+((j1%2)*16+8)%TS,py+11); ctx.lineTo(px+((j1%2)*16+8)%TS,py+22);
-        ctx.moveTo(px+(j2%TS),py); ctx.lineTo(px+(j2%TS),py+11);
-        ctx.stroke();
-        if(tileAt(tx,ty-1)!==T_WALL){ ctx.fillStyle=th.wallTop; ctx.fillRect(px,py,TS,5); }
+      if(tl===T_WALL || tl===T_SECRET){
+        // photographic-ish stone blocks from the generated material
+        ctx.fillStyle=wp; ctx.fillRect(px,py,TS,TS);
+        // per-tile tonal variation breaks the repeat
+        const sh=(v-0.5)*0.12;
+        ctx.fillStyle=sh>0?`rgba(255,240,220,${sh})`:`rgba(0,0,0,${-sh})`;
+        ctx.fillRect(px,py,TS,TS);
+        // grime gathers at floor level
+        if(tileAt(tx,ty+1)===T_FLOOR){
+          const gr=ctx.createLinearGradient(0,py+TS-12,0,py+TS);
+          gr.addColorStop(0,'rgba(0,0,0,0)'); gr.addColorStop(1,'rgba(0,0,0,0.38)');
+          ctx.fillStyle=gr; ctx.fillRect(px,py+TS-12,TS,12);
+        }
+        // 2.5D front face: walls show their face toward the camera
+        if(tileAt(tx,ty+1)!==T_WALL){
+          const fh=12;
+          ctx.fillStyle='rgba(0,0,0,0.45)'; ctx.fillRect(px,py+TS-fh,TS,fh);
+          ctx.fillStyle='rgba(255,255,255,0.10)'; ctx.fillRect(px,py+TS-fh,TS,2);
+          ctx.fillStyle='rgba(0,0,0,0.5)';
+          ctx.fillRect(px+((hash2(tx*3,ty*7)*TS)|0)%TS,py+TS-fh+3,2,fh-3);
+        }
+        // top cap when nothing above (raised block look)
+        if(tileAt(tx,ty-1)!==T_WALL){
+          ctx.fillStyle=th.wallTop; ctx.fillRect(px,py,TS,5);
+          ctx.fillStyle='rgba(255,255,255,0.10)'; ctx.fillRect(px,py,TS,1);
+          ctx.fillStyle='rgba(0,0,0,0.30)'; ctx.fillRect(px,py+5,TS,1);
+        }
+        // cracked secret wall: faint fracture lines, no obvious door
+        if(tl===T_SECRET){
+          ctx.strokeStyle='rgba(0,0,0,0.55)'; ctx.lineWidth=1.4;
+          ctx.beginPath();
+          ctx.moveTo(px+7,py+3); ctx.lineTo(px+12,py+13); ctx.lineTo(px+9,py+21);
+          ctx.lineTo(px+16,py+29);
+          ctx.moveTo(px+25,py+4); ctx.lineTo(px+21,py+12); ctx.lineTo(px+24,py+18);
+          ctx.stroke();
+          ctx.fillStyle='rgba(196,107,255,0.10)'; ctx.fillRect(px+7,py+20,11,4);
+        }
+        // Ember Seal runes pulse until the floor is cleared
+        if(sealOn && sealSet.has(tx+','+ty)){
+          const gl=0.5+0.5*Math.sin(t*3.2+(tx*0.7+ty*1.3));
+          ctx.fillStyle=`rgba(255,90,40,${0.10+gl*0.22})`; ctx.fillRect(px,py,TS,TS);
+          ctx.strokeStyle=`rgba(255,150,70,${0.30+gl*0.45})`; ctx.lineWidth=1.6;
+          ctx.strokeRect(px+2.5,py+2.5,TS-5,TS-5);
+          ctx.fillStyle=`rgba(255,190,110,${0.30+gl*0.40})`;
+          ctx.fillRect(px+TS/2-1.5,py+TS/2-1.5,3,3);
+        }
         continue;
       }
       if(tl===T_LAVA){
+        // layered molten flow: deep crust, bright current, bubbles
         const sh=Math.sin(t*2.2+tx*0.8+ty*1.1)*0.5+0.5;
-        ctx.fillStyle=`rgb(${190+sh*50|0},${58+sh*46|0},18)`;
+        const sh2=Math.sin(t*1.3-tx*1.7+ty*0.6)*0.5+0.5;
+        ctx.fillStyle=`rgb(${168+sh*70|0},${44+sh2*42|0},10)`;
         ctx.fillRect(px,py,TS,TS);
-        if(v>0.55){
+        ctx.fillStyle=`rgba(255,${150+sh2*80|0},40,${0.16+sh*0.22})`;
+        ctx.fillRect(px,py+((v*20)|0),TS,3);
+        if(v>0.45){
           const gl=0.5+0.5*Math.sin(t*4+tx*2+ty*3);
           ctx.fillStyle=`rgba(255,225,120,${0.25+gl*0.4})`;
           ctx.fillRect(px+6+v*14,py+8+((v*37)%12),5,3);
           ctx.fillRect(px+18,py+20-gl*4,4,3);
         }
+        // molten rim
+        const glow=0.22+0.14*Math.sin(t*3.4+tx*1.7+ty*0.9);
+        ctx.strokeStyle=`rgba(255,170,70,${glow})`; ctx.lineWidth=3;
+        ctx.strokeRect(px+1.5,py+1.5,TS-3,TS-3);
         continue;
       }
       if(tl===T_STAIRSDOWN){
@@ -58,25 +412,46 @@ function drawTiles(){
         ctx.strokeRect(px+2,py+2,TS-4,TS-4);
         continue;
       }
-      // floor
-      ctx.fillStyle = v>0.5? th.floorHi : th.floor;
+      // floor slabs
+      ctx.fillStyle=fp; ctx.fillRect(px,py,TS,TS);
+      const sh=(v-0.5)*0.10;
+      ctx.fillStyle=sh>0?`rgba(255,240,220,${sh})`:`rgba(0,0,0,${-sh})`;
       ctx.fillRect(px,py,TS,TS);
-      if(v>0.78){ ctx.fillStyle='rgba(0,0,0,0.25)'; ctx.fillRect(px+v*20,py+10,3,2); ctx.fillRect(px+20,py+v*16,2,2); }
-      if(v<0.14){ ctx.strokeStyle='rgba(0,0,0,0.28)'; ctx.lineWidth=1;
-        ctx.beginPath(); ctx.moveTo(px+6,py+8); ctx.lineTo(px+14,py+16); ctx.lineTo(px+12,py+24); ctx.stroke(); }
+      if(v>0.90){ // loose grit
+        ctx.fillStyle='rgba(200,190,170,0.22)';
+        ctx.fillRect(px+v*20,py+10,2,2); ctx.fillRect(px+19,py+v*16,2,2);
+      }
+      if(v<0.05){ // hairline tile crack
+        ctx.strokeStyle='rgba(0,0,0,0.32)'; ctx.lineWidth=1;
+        ctx.beginPath(); ctx.moveTo(px+6,py+7); ctx.lineTo(px+13,py+15); ctx.lineTo(px+11,py+24); ctx.stroke();
+      }
+      // ambient occlusion — walls cast soft shadows onto the floor
+      if(tileAt(tx,ty-1)===T_WALL){
+        ctx.fillStyle='rgba(0,0,0,0.30)'; ctx.fillRect(px,py,TS,7);
+        ctx.fillStyle='rgba(0,0,0,0.16)'; ctx.fillRect(px,py+7,TS,5);
+      }
+      if(tileAt(tx,ty+1)===T_WALL){ ctx.fillStyle='rgba(0,0,0,0.26)'; ctx.fillRect(px,py+TS-6,TS,6); }
+      if(tileAt(tx-1,ty)===T_WALL){ ctx.fillStyle='rgba(0,0,0,0.24)'; ctx.fillRect(px,py,5,TS); }
+      if(tileAt(tx+1,ty)===T_WALL){ ctx.fillStyle='rgba(0,0,0,0.24)'; ctx.fillRect(px+TS-5,py,5,TS); }
     }
     return;
   }
   /* surface */
+  const gp=surfacePat('grass'), cp=surfacePat('corrupt'), sp=surfacePat('sand'),
+        snp=surfacePat('snow'), mrp=surfacePat('marsh'), crp=surfacePat('crystal'), dup=surfacePat('dune');
   for(let ty=y0;ty<=y1;ty++)for(let tx=x0;tx<=x1;tx++){
     const tl=tiles[ty*mapW+tx], v=tileVar[ty*mapW+tx];
     const px=tx*TS-cam.x, py=ty*TS-cam.y;
     if(tl===T_WATER){
       const sh=Math.sin(t*1.5+tx*0.9+ty*1.3)*0.5+0.5;
-      ctx.fillStyle=`rgb(${34+sh*14|0},${94+sh*22|0},${158+sh*30|0})`;
+      const sh2=Math.sin(t*0.9-tx*0.6+ty*0.8)*0.5+0.5;
+      ctx.fillStyle=`rgb(${30+sh*16|0},${88+sh2*26|0},${150+sh*34|0})`;
       ctx.fillRect(px,py,TS,TS);
-      if(v>0.7){
-        ctx.strokeStyle='rgba(255,255,255,0.14)'; ctx.lineWidth=1.5;
+      // caustic shimmer
+      ctx.fillStyle=`rgba(160,230,255,${0.05+sh*0.07})`;
+      ctx.fillRect(px,py,TS,TS);
+      if(v>0.62){
+        ctx.strokeStyle='rgba(255,255,255,0.16)'; ctx.lineWidth=1.5;
         ctx.beginPath();
         const wy=py+8+v*16+Math.sin(t*2+tx)*2;
         ctx.moveTo(px+5,wy); ctx.quadraticCurveTo(px+12,wy-3,px+19,wy);
@@ -85,14 +460,52 @@ function drawTiles(){
       continue;
     }
     if(tl===T_SAND){
-      ctx.fillStyle=`rgb(${212+v*14|0},${196+v*12|0},${140+v*10|0})`;
+      ctx.fillStyle=sp; ctx.fillRect(px,py,TS,TS);
+      ctx.fillStyle=`rgba(255,244,210,${(v-0.5)*0.04})`;
       ctx.fillRect(px,py,TS,TS);
-      if(v<0.25){ ctx.fillStyle='rgba(120,100,60,0.35)'; ctx.fillRect(px+v*90,py+10,2,2); ctx.fillRect(px+20,py+v*90,2,2); }
+      continue;
+    }
+    if(tl===T_SNOW){
+      ctx.fillStyle=snp; ctx.fillRect(px,py,TS,TS);
+      ctx.fillStyle=`rgba(120,170,220,${(v-0.5)*0.05})`;
+      ctx.fillRect(px,py,TS,TS);
+      if(v>0.8){
+        ctx.fillStyle='rgba(255,255,255,0.7)';
+        ctx.fillRect(px+v*22,py+8,2,2); ctx.fillRect(px+10,py+v*20,1.6,1.6);
+      }
+      continue;
+    }
+    if(tl===T_MARSH){
+      ctx.fillStyle=mrp; ctx.fillRect(px,py,TS,TS);
+      ctx.fillStyle=`rgba(10,24,14,${(v-0.5)*0.07})`;
+      ctx.fillRect(px,py,TS,TS);
+      if(v>0.82){
+        const gl=0.5+0.5*Math.sin(t*2.4+tx*2+ty);
+        ctx.fillStyle=`rgba(126,203,160,${0.25+gl*0.3})`;
+        ctx.fillRect(px+8+v*12,py+10,2.5,2.5);
+      }
+      continue;
+    }
+    if(tl===T_CRYSTAL){
+      ctx.fillStyle=crp; ctx.fillRect(px,py,TS,TS);
+      ctx.fillStyle=`rgba(40,10,70,${(v-0.5)*0.07})`;
+      ctx.fillRect(px,py,TS,TS);
+      if(v>0.86){
+        const gl=0.5+0.5*Math.sin(t*3.4+tx+ty*2);
+        ctx.fillStyle=`rgba(201,160,255,${0.4+gl*0.4})`;
+        ctx.fillRect(px+12,py+8+v*6,3,5);
+      }
+      continue;
+    }
+    if(tl===T_DUNE){
+      ctx.fillStyle=dup; ctx.fillRect(px,py,TS,TS);
+      ctx.fillStyle=`rgba(90,40,10,${(v-0.5)*0.05})`;
+      ctx.fillRect(px,py,TS,TS);
       continue;
     }
     if(tl===T_CORRUPT){
-      const g=40+v*16|0, b=64+v*20|0, r=64+v*18|0;
-      ctx.fillStyle=`rgb(${r},${g},${b})`;
+      ctx.fillStyle=cp; ctx.fillRect(px,py,TS,TS);
+      ctx.fillStyle=`rgba(30,0,40,${(v-0.5)*0.06})`;
       ctx.fillRect(px,py,TS,TS);
       if(v>0.86){
         const gl=0.5+0.5*Math.sin(t*3+tx+ty);
@@ -110,11 +523,13 @@ function drawTiles(){
       ctx.strokeRect(px+3,py+3,TS-6,TS-6);
       continue;
     }
-    const g=140+v*22|0;
-    ctx.fillStyle=`rgb(${52+v*14|0},${g},${58+v*12|0})`;
+    // grass
+    ctx.fillStyle=gp; ctx.fillRect(px,py,TS,TS);
+    const sh=(v-0.5)*0.05;
+    ctx.fillStyle=sh>0?`rgba(210,255,190,${sh})`:`rgba(0,20,10,${-sh})`;
     ctx.fillRect(px,py,TS,TS);
-    if(v>0.55){
-      ctx.strokeStyle='rgba(30,80,30,0.5)'; ctx.lineWidth=1.4;
+    if(v>0.72){
+      ctx.strokeStyle='rgba(26,74,30,0.5)'; ctx.lineWidth=1.4;
       ctx.beginPath();
       const bx=px+4+v*20, by=py+8+v*16;
       ctx.moveTo(bx,by+5); ctx.lineTo(bx-1.5,by);
