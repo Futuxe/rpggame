@@ -1,0 +1,75 @@
+/* ---------------- input ---------------- */
+const keys={};
+let mouse={x:0,y:0,down:false};
+window.addEventListener('keydown',e=>{
+  const k=e.key.toLowerCase();
+  if(['arrowup','arrowdown','arrowleft','arrowright',' '].includes(k)) e.preventDefault();
+  keys[k]=true;
+  ac();
+  if(k==='m'){ muted=!muted; addText(player.x,player.y-26,muted?'Muted':'Sound on','#c9d1d9'); }
+  if(k==='b'){ state.dbg=!state.dbg; }
+  if(k==='p' && state.mode==='play'){ state.paused=!state.paused; }
+  if(state.mode==='title' && (k==='enter'||k===' ')){ startGame(); return; }
+  if(state.mode==='dead' && k==='enter'){ respawn(); return; }
+  if(state.mode==='victory' && k==='enter'){ state.mode='play'; state.firstVictory=false; return; }
+  if(state.dialog){
+    const D=state.dialog;
+    if(D.options){
+      for(let i=0;i<D.options.length;i++)
+        if(k===String(i+1)){ D.options[i].act(); return; }
+      if(k==='escape'){ state.dialog=null; return; }
+    }
+    if(k==='e'||k==='enter'||k===' '||k==='escape'){
+      if(D.options && (k==='e')){ state.dialog=null; return; }
+      if(!D.options){
+        if(D.page<D.lines.length-1) D.page++;
+        else state.dialog=null;
+      }
+    }
+    return;
+  }
+  if(state.mode!=='play') return;
+  if(k==='e') interact();
+  if(k==='q') drinkPotion();
+  if(k===' '||k==='j') doAttack(Math.atan2(player.face.y,player.face.x));
+});
+window.addEventListener('keyup',e=>{ keys[e.key.toLowerCase()]=false; });
+window.addEventListener('blur',()=>{ for(const k in keys) keys[k]=false; mouse.down=false; });
+cvs.addEventListener('mousemove',e=>{ const r=cvs.getBoundingClientRect(); mouse.x=e.clientX-r.left; mouse.y=e.clientY-r.top; });
+cvs.addEventListener('mousedown',e=>{
+  ac();
+  if(state.mode==='title'){ startGame(); return; }
+  if(state.mode==='dead'){ respawn(); return; }
+  if(state.mode==='victory'){ state.mode='play'; state.firstVictory=false; return; }
+  if(state.dialog||state.paused||state.trans) return;
+  const wx=mouse.x+cam.x, wy=mouse.y+cam.y;
+  doAttack(Math.atan2(wy-player.y,wx-player.x));
+});
+cvs.addEventListener('contextmenu',e=>e.preventDefault());
+
+function startGame(){
+  state.mode='play';
+  player.x=VILLAGE.x*TS+TS/2; player.y=(VILLAGE.y+2.2)*TS;
+  sfx('quest');
+  addText(player.x,player.y-40,'Welcome to Emberfall','#ffd75e',3,true);
+}
+function respawn(){
+  if(state.floor!==0){ genSurface(); spawnNPCs(); buildMinimap(); state.floor=0; }
+  player.hp=player.maxHp;
+  player.gold=Math.floor(player.gold*0.8);
+  player.x=VILLAGE.x*TS+TS/2; player.y=(VILLAGE.y+2.2)*TS;
+  enemies=[]; arrows=[]; drops=[];
+  state.boss=null; state.portal=null; state.trans=null;
+  state.mode='play'; player.invulnT=2;
+  addText(player.x,player.y-40,'You wake by the village well... (lost 20% gold)','#c9d1d9',2.5,true);
+}
+
+/* ---------------- camera ---------------- */
+const cam={x:0,y:0};
+function updateCam(dt){
+  const maxX=mapW*TS-VW, maxY=mapH*TS-VH;
+  const tx = maxX<=0 ? maxX/2 : clamp(player.x-VW/2,0,maxX);
+  const ty = maxY<=0 ? maxY/2 : clamp(player.y-VH/2,0,maxY);
+  cam.x=lerp(cam.x,tx,1-Math.pow(0.0001,dt));
+  cam.y=lerp(cam.y,ty,1-Math.pow(0.0001,dt));
+}

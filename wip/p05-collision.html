@@ -1,0 +1,70 @@
+/* ---------- collision ---------- */
+function circleFree(x,y,r,ignoreTrees){
+  const minTx=Math.floor((x-r)/TS), maxTx=Math.floor((x+r)/TS);
+  const minTy=Math.floor((y-r)/TS), maxTy=Math.floor((y+r)/TS);
+  for(let ty=minTy;ty<=maxTy;ty++)for(let tx=minTx;tx<=maxTx;tx++){
+    if(!SOLID(tileAt(tx,ty))) continue;
+    const cx=clamp(x,tx*TS,(tx+1)*TS), cy=clamp(y,ty*TS,(ty+1)*TS);
+    const dx=cx-x, dy=cy-y;
+    if(dx*dx+dy*dy < r*r) return false;
+  }
+  if(!ignoreTrees){
+    const gr=Math.ceil(r/TS)+1;
+    const tx0=Math.floor(x/TS), ty0=Math.floor(y/TS);
+    for(let dy=-gr;dy<=gr;dy++)for(let dx=-gr;dx<=gr;dx++){
+      const t=treeGrid.get((tx0+dx)+','+(ty0+dy));
+      if(t){ const ddx=t.x-x, ddy=t.y-y, rr=r+t.cr;
+        if(ddx*ddx+ddy*ddy<rr*rr) return false; }
+    }
+  }
+  for(const b of buildings){
+    const cx=clamp(x,b.x,b.x+b.w), cy=clamp(y,b.y,b.y+b.h);
+    const dx=cx-x, dy=cy-y;
+    if(dx*dx+dy*dy < r*r) return false;
+  }
+  for(const rk of rocks){
+    const dx=rk.x-x, dy=rk.y-y, rr=r+rk.r*0.8;
+    if(dx*dx+dy*dy<rr*rr) return false;
+  }
+  if(state.floor===0) for(const n of npcs){
+    const dx=n.x-x, dy=n.y-y, rr=r+n.r*0.8;
+    if(dx*dx+dy*dy<rr*rr) return false;
+  }
+  for(const c of chests){
+    if(c.opened) continue;
+    const dx=c.x-x, dy=c.y-y, rr=r+10;
+    if(dx*dx+dy*dy<rr*rr) return false;
+  }
+  for(const s of shrines){
+    const dx=s.x-x, dy=s.y-y, rr=r+10;
+    if(dx*dx+dy*dy<rr*rr) return false;
+  }
+  return true;
+}
+function moveEntity(e,dx,dy){
+  if(dx!==0){
+    if(circleFree(e.x+dx,e.y,e.r)) e.x+=dx;
+    else if(circleFree(e.x+dx*0.35,e.y,e.r)) e.x+=dx*0.35; // wall-slide assist
+  }
+  if(dy!==0){
+    if(circleFree(e.x,e.y+dy,e.r)) e.y+=dy;
+    else if(circleFree(e.x,e.y+dy*0.35,e.r)) e.y+=dy*0.35;
+  }
+}
+/* enemies refuse to step into lava unless they fly */
+function avoidLava(e,dx,dy){
+  if(e.flies || tileAtPx(e.x+dx,e.y+dy)!==T_LAVA){ moveEntity(e,dx,dy); return; }
+  if(dx!==0 && tileAtPx(e.x+dx,e.y)!==T_LAVA) moveEntity(e,dx,0);
+  else if(dy!==0 && tileAtPx(e.x,e.y+dy)!==T_LAVA) moveEntity(e,0,dy);
+}
+function findFreeSpot(x,y,r=12){
+  if(circleFree(x,y,r)) return {x,y};
+  for(let d=1;d<40;d++){
+    for(let i=0;i<8;i++){
+      const a=i/8*TAU;
+      const nx=x+Math.cos(a)*d*10, ny=y+Math.sin(a)*d*10;
+      if(circleFree(nx,ny,r)) return {x:nx,y:ny};
+    }
+  }
+  return {x,y};
+}

@@ -1,0 +1,147 @@
+/* ---------------- update ---------------- */
+function update(dt){
+  state.time+=dt;
+  musicTick(dt);
+  if(state.shakeT>0) state.shakeT-=dt;
+
+  // particles / texts always animate
+  for(const p of parts){ p.life-=dt; p.x+=p.vx*dt; p.y+=p.vy*dt; p.vy+=p.grav*dt; p.vx*=0.98; }
+  parts=parts.filter(p=>p.life>0);
+  for(const t of texts){ t.life-=dt; t.y-=26*dt; }
+  texts=texts.filter(t=>t.life>0);
+
+  if(state.mode!=='play' || state.paused) return;
+  playTime+=dt;
+
+  // floor transition fade
+  if(state.trans){
+    const tr=state.trans;
+    if(tr.phase==='out'){ tr.t+=dt*2.4; if(tr.t>=1){ tr.t=1; tr.cb(); tr.phase='in'; } }
+    else { tr.t-=dt*2.4; if(tr.t<=0) state.trans=null; }
+    return;
+  }
+
+  /* --- player --- */
+  const p=player;
+  p.atkCd-=dt; p.swingT-=dt; p.invulnT-=dt; p.hurtFlash-=dt;
+  let mx=0,my=0;
+  const canMove = !state.dialog;
+  if(canMove){
+    if(keys['w']||keys['arrowup']) my-=1;
+    if(keys['s']||keys['arrowdown']) my+=1;
+    if(keys['a']||keys['arrowleft']) mx-=1;
+    if(keys['d']||keys['arrowright']) mx+=1;
+  }
+  p.moving = mx!==0||my!==0;
+  if(p.moving){
+    const l=Math.hypot(mx,my); mx/=l; my/=l;
+    moveEntity(p,mx*p.speed*dt,my*p.speed*dt);
+    p.face.x=mx; p.face.y=my;
+    p.walkT+=dt*10;
+  } else p.walkT=0;
+  // continuous attack while mouse held
+  if(mouse.down && canMove) doAttack(Math.atan2(mouse.y+cam.y-p.y, mouse.x+cam.x-p.x));
+  // lava burns
+  if(tileAtPx(p.x,p.y)===T_LAVA && p.invulnT<=0)
+    hurtPlayer(8,p.x+rnd(-1,1),p.y+rnd(-1,1));
+  // safety net: never stay trapped inside collision
+  if(!circleFree(p.x,p.y,p.r)){ const s=findFreeSpot(p.x,p.y,p.r); p.x=s.x; p.y=s.y; }
+
+  /* --- enemies --- */
+  const villagePx=VILLAGE.x*TS, villagePy=VILLAGE.y*TS;
+  for(const e of [...enemies]){
+    e.flash-=dt; e.atkCd-=dt; e.shootCd-=dt; e.castCd-=dt; e.summonCd-=dt; e.phase+=dt*6;
+    e.x+=e.kb.x*dt; e.y+=e.kb.y*dt;
+    const kdec=Math.pow(0.02,dt); e.kb.x*=kdec; e.kb.y*=kdec;
+    if(state.floor===0){
+      const vd=dist(e.x,e.y,villagePx,villagePy);
+      if(vd<VILLAGE.r*TS){
+        const a=Math.atan2(e.y-villagePy,e.x-villagePx);
+        moveEntity(e,Math.cos(a)*e.spd*1.4*dt,Math.sin(a)*e.spd*1.4*dt);
+        continue;
+      }
+    }
+    const d=dist(e.x,e.y,p.x,p.y);
+    const aggro=EDEF[e.type].aggro;
+    if(d<aggro && d>0){
+      let a=Math.atan2(p.y-e.y,p.x-e.x);
+      if(e.type==='bat'){
+        a+=Math.sin(e.phase*0.9)*0.8;
+        avoidLava(e,Math.cos(a)*e.spd*dt,Math.sin(a)*e.spd*dt);
+      } else if(e.type==='necro'){
+        if(d<150) avoidLava(e,-Math.cos(a)*e.spd*dt,-Math.sin(a)*e.spd*dt);
+        else if(d>280) avoidLava(e,Math.cos(a)*e.spd*dt,Math.sin(a)*e.spd*dt);
+        else { const s=Math.sin(e.phase*0.5);
+          avoidLava(e,Math.cos(a+Math.PI/2)*e.spd*0.5*s*dt,Math.sin(a+Math.PI/2)*e.spd*0.5*s*dt); }
+        if(e.castCd<=0 && d<420){
+          e.castCd=2.6; sfx('fire');
+          eBolt(e.x,e.y,a,250,e.dmg*0.75,'void',1.8);
+          burst(e.x,e.y,'#c46bff',5,60,0.3,2);
+        }
+        if(e.summonCd<=0){
+          e.summonCd=8;
+          if(enemies.filter(x=>x.necroMinion).length<2){
+            for(let i=0;i<2;i++){
+              const s=findFreeSpot(e.x+rnd(-40,40),e.y+rnd(-40,40),11);
+              makeEnemy('skeleton',s.x,s.y).necroMinion=true;
+            }
+            sfx('summon'); burst(e.x,e.y,'#c46bff',10,80,0.5,3);
+          }
+        }
+      } else {
+        avoidLava(e,Math.cos(a)*e.spd*dt,Math.sin(a)*e.spd*dt);
+      }
+      if(e.shoots && d<260 && d>70 && e.shootCd<=0){
+        e.shootCd=1.9; sfx('arrow');
+        eBolt(e.x,e.y,a,235,e.dmg*0.75,'bone',2.2);
+      }
+      if(d<e.r+p.r+3 && e.atkCd<=0){
+        e.atkCd=0.85; hurtPlayer(e.dmg,e.x,e.y);
+      }
+    } else {
+      e.wanderT-=dt;
+      if(e.wanderT<=0){ e.wanderT=rnd(1,2.6); e.wa=rnd(TAU); }
+      avoidLava(e,Math.cos(e.wa)*e.spd*0.35*dt,Math.sin(e.wa)*e.spd*0.35*dt);
+    }
+  }
+
+  /* --- boss --- */
+  if(state.boss) updateBoss(state.boss,dt);
+  else if(state.floor>0 && !state.bossesDead[state.floor] && state.dbossRoom){
+    const br=state.dbossRoom;
+    const ptx=p.x/TS, pty=p.y/TS;
+    if(ptx>br.x-1.5 && ptx<br.x+br.w+1.5 && pty>br.y-1.5 && pty<br.y+br.h+1.5)
+      spawnBoss(FLOORBOSS[state.floor], br.cx*TS+TS/2, br.cy*TS+TS/2);
+  }
+
+  /* --- arrows (enemy bolts) --- */
+  for(const a of [...arrows]){
+    a.life-=dt; a.x+=a.vx*dt; a.y+=a.vy*dt;
+    if(a.life<=0 || !circleFree(a.x,a.y,3,true)){ arrows.splice(arrows.indexOf(a),1); continue; }
+    if(dist(a.x,a.y,p.x,p.y)<p.r+4){
+      hurtPlayer(a.dmg,a.x-a.vx,a.y-a.vy);
+      arrows.splice(arrows.indexOf(a),1);
+    }
+  }
+
+  /* --- drops --- */
+  for(const d of [...drops]){
+    d.t+=dt*4;
+    d.x+=d.vx*dt; d.y+=d.vy*dt; d.vx*=0.9; d.vy*=0.9;
+    const dd=dist(d.x,d.y,p.x,p.y);
+    if(dd<70){ const a=Math.atan2(p.y-d.y,p.x-d.x); const pull=clamp((70-dd)*8,60,320); d.x+=Math.cos(a)*pull*dt; d.y+=Math.sin(a)*pull*dt; }
+    if(dd<p.r+10){
+      drops.splice(drops.indexOf(d),1);
+      if(d.type==='coin'){ player.gold+=d.val; addText(d.x,d.y-10,'+'+d.val+'g','#ffd75e',0.7); sfx('coin'); }
+      else if(d.type==='potion'){ player.potions++; addText(d.x,d.y-10,'+1 potion','#ff7b8f',0.9); sfx('potion'); }
+      else { gainXp(d.val); sfx('xp'); }
+    }
+  }
+
+  /* --- spawn timer --- */
+  state.spawnT-=dt;
+  if(state.spawnT<=0){
+    state.spawnT=1.4;
+    if(state.floor===0) spawnEnemySurface(); else spawnEnemyFloor();
+  }
+}

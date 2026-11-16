@@ -1,0 +1,97 @@
+/* ---------------- interactions & floor transitions ---------------- */
+function startTransition(cb){ state.trans={t:0,phase:'out',cb}; }
+function toSurface(reason){
+  state.floor=0; genSurface(); spawnNPCs(); buildMinimap();
+  enemies=[]; arrows=[]; drops=[];
+  player.x=VILLAGE.x*TS+TS/2; player.y=(VILLAGE.y+2.2)*TS;
+  player.x=findFreeSpot(player.x,player.y,player.r).x;
+  state.boss=null; state.portal=null;
+  addText(player.x,player.y-40,reason,'#c9d1d9',2.5,true);
+}
+function descend(){
+  if(state.floor>=MAXFLOOR) return;
+  sfx('stairs');
+  state.flags.descended=true; readyIf('q2');
+  startTransition(()=>{
+    state.floor++;
+    state.boss=null;
+    genDungeon(state.floor);
+    player.x=state.dstart.x; player.y=state.dstart.y;
+    populateFloor(); buildMinimap();
+    cam.x=player.x-VW/2; cam.y=player.y-VH/2;
+    sfx('quest');
+    addText(player.x,player.y-46,'Floor '+state.floor+' — '+FLNAMES[state.floor],'#ff8a5e',3,true);
+    if(state.bossesDead[state.floor])
+      addText(player.x,player.y-70,'Its guardian already lies slain.','#c9d1d9',2.5,true);
+  });
+  if(state.quest.id==='q2' && state.quest.state==='active'){ state.flags.descended=true; readyIf('q2'); }
+}
+function ascend(){
+  if(state.floor<=0) return;
+  sfx('stairs');
+  startTransition(()=>{
+    if(state.floor===1){ state.boss=null; toSurface('You climb back to Emberfall — Surface'); }
+    else {
+      state.floor--;
+      state.boss=null;
+      genDungeon(state.floor);
+      player.x=state.dstart.x; player.y=state.dstart.y;
+      populateFloor(); buildMinimap();
+      cam.x=player.x-VW/2; cam.y=player.y-VH/2;
+      addText(player.x,player.y-46,'Floor '+state.floor+' — '+FLNAMES[state.floor],'#ff8a5e',2.5,true);
+    }
+  });
+}
+function openChest(c){
+  c.opened=true; state.openedChests.add(c.id);
+  sfx('chest');
+  burst(c.x,c.y,'#ffd75e',20,150,0.8,3.5);
+  const n=4+((Math.random()*4)|0);
+  for(let i=0;i<n;i++) drops.push({type:'coin',x:c.x+rnd(-14,14),y:c.y+rnd(-14,14),val:Math.ceil(rnd(2,6)),t:rnd(TAU),vx:rnd(-60,60),vy:rnd(-60,60)});
+  if(Math.random()<0.4) drops.push({type:'potion',x:c.x,y:c.y-6,t:rnd(TAU),vx:0,vy:0});
+  if(Math.random()<0.35) for(let i=0;i<2;i++) drops.push({type:'gem',x:c.x+rnd(-10,10),y:c.y+rnd(-10,10),val:Math.ceil(rnd(20,50)),t:rnd(TAU),vx:rnd(-40,40),vy:rnd(-40,40)});
+}
+function activateShrine(s){
+  s.active=true;
+  s.left=3+2*s.fl;
+  sfx('shrine');
+  addText(s.x,s.y-40,'The shrine awakens! Slay the guardians ('+s.left+')','#ffd75e',2.6,true);
+  burst(s.x,s.y,'#ffd75e',24,160,0.9,3.5);
+  for(let i=0;i<s.left;i++){
+    const a=rnd(TAU), r=rnd(110,240);
+    const spot=findFreeSpot(s.x+Math.cos(a)*r,s.y+Math.sin(a)*r,12);
+    makeEnemy(pick(SPAWNS[s.fl]),spot.x,spot.y,{shrineRef:s,elite:false,minion:false});
+  }
+}
+function usePortal(){
+  sfx('stairs');
+  startTransition(()=>{ toSurface('The portal carries you home...'); });
+}
+function interact(){
+  const n=nearNPC();
+  if(n){
+    if(n.kind==='elder') elderDialog();
+    else if(n.kind==='merchant') merchantDialog();
+    else openDialog('Little Osk',[
+      'I saw a BIG red monster in the south-east wastes...',
+      'Papa says the stairway it guards goes DOWN, like, five floors deep!',
+      'And there are glowing shrines down there — Papa says never press E on them.',
+      'Be careful, mister!',
+    ]);
+    return;
+  }
+  const ptx=Math.floor(player.x/TS), pty=Math.floor(player.y/TS);
+  let sd=null;
+  for(const [dx,dy] of [[0,0],[1,0],[-1,0],[0,1],[0,-1]]){
+    const t=tileAt(ptx+dx,pty+dy);
+    if(t===T_STAIRSDOWN) sd='down';
+    else if(t===T_STAIRSUP) sd='up';
+  }
+  if(sd==='down' && state.floor<MAXFLOOR){ descend(); return; }
+  if(sd==='up' && state.floor>0){ ascend(); return; }
+  for(const c of chests)
+    if(!c.opened && dist(c.x,c.y,player.x,player.y)<38){ openChest(c); return; }
+  for(const s of shrines)
+    if(!s.active && !s.done && dist(s.x,s.y,player.x,player.y)<46){ activateShrine(s); return; }
+  if(state.portal && dist(state.portal.x,state.portal.y,player.x,player.y)<52){ usePortal(); return; }
+}

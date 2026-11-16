@@ -1,0 +1,193 @@
+/* ---------------- enemy bolts ---------------- */
+function eBolt(x,y,ang,spd,dmg,kind,life=2){
+  arrows.push({x,y,vx:Math.cos(ang)*spd,vy:Math.sin(ang)*spd,life,dmg,kind});
+}
+
+/* ---------------- bosses ---------------- */
+const BDEF={
+  boneking:   {name:'THE BONE KING',          hp:380,  spd:64, dmg:18, r:20, xp:260, enrage:0.35},
+  cindergolem:{name:'THE CINDER GOLEM',      hp:560,  spd:42, dmg:24, r:24, xp:340, enrage:0.40},
+  malachar:   {name:'MALACHAR THE NECRO LORD',hp:640,  spd:58, dmg:16, r:20, xp:420, enrage:0.40},
+  pyrelord:   {name:'PYRELORD VEX',          hp:780,  spd:74, dmg:20, r:22, xp:520, enrage:0.45},
+  tyrant:     {name:'THE EMBER TYRANT',      hp:1150, spd:56, dmg:26, r:28, xp:700, enrage:0.50},
+};
+function spawnBoss(kind,x,y){
+  const d=BDEF[kind];
+  const boost=1+(state.floor-1)*0.12+(player.level-1)*0.03;
+  state.boss={kind,x,y,r:d.r,hp:d.hp*boost,maxHp:d.hp*boost,spd:d.spd,dmg:d.dmg,xp:d.xp,
+    atkCd:1.2,telegraph:0,telegraphR:0,teleA:0,dashT:0,dashA:0,
+    cd:{volley:2.5,slam:3.5,summon:5,blink:7,rain:5,nova:4,rock:2.5,dash:4},
+    flash:0,phase:rnd(TAU),enraged:false,kb:{x:0,y:0}};
+  sfx('bossroar'); shake(0.6,8);
+  addText(x,y-70,d.name+' AWAKENS','#ff6a3d',2.4,true);
+}
+function damageBoss(dmg,kx,ky){
+  const b=state.boss; if(!b) return;
+  b.hp-=dmg; b.flash=0.15;
+  b.kb.x+=kx*0.22; b.kb.y+=ky*0.22;
+  addText(b.x+rnd(-10,10),b.y-b.r-10,Math.round(dmg),'#ffd75e');
+  burst(b.x,b.y,'#ff9a3d',8,130,0.4,3);
+  sfx('hit');
+  if(b.hp<=0) defeatBoss();
+}
+function defeatBoss(){
+  const b=state.boss, kind=b.kind;
+  burst(b.x,b.y,'#ff6a3d',60,260,1.4,5);
+  burst(b.x,b.y,'#ffd75e',40,200,1.2,4);
+  shake(0.8,12); sfx('slam'); sfx('level');
+  addText(b.x,b.y-40,BDEF[kind].name+' FALLS!','#ffd75e',3,true);
+  gainXp(b.xp); killCount++;
+  for(let i=0;i<12;i++) drops.push({type:'coin',x:b.x+rnd(-30,30),y:b.y+rnd(-30,30),val:Math.ceil(rnd(6,18)),t:rnd(TAU),vx:rnd(-80,80),vy:rnd(-80,80)});
+  for(let i=0;i<2;i++) drops.push({type:'potion',x:b.x+rnd(-20,20),y:b.y+rnd(-20,20),t:rnd(TAU),vx:0,vy:0});
+  for(let i=0;i<3;i++) drops.push({type:'gem',x:b.x+rnd(-24,24),y:b.y+rnd(-24,24),val:Math.ceil(rnd(60,140)),t:rnd(TAU),vx:rnd(-60,60),vy:rnd(-60,60)});
+  state.boss=null;
+  state.bossesDead[state.floor]=true;
+  bossReward(kind);
+}
+function bossReward(kind){
+  const f=state.flags;
+  if(kind==='boneking'){
+    player.maxHp+=15; player.hp+=15;
+    addText(player.x,player.y-30,'+15 max HP — Bone Charm','#7ee787',2.5,true);
+    readyIf('q3');
+  } else if(kind==='cindergolem'){
+    f.golem=true; player.armor+=1;
+    addText(player.x,player.y-30,'+1 Armor — Cinder Plate','#9ad1ff',2.5,true);
+    readyIf('q4');
+  } else if(kind==='malachar'){
+    f.malachar=true; player.dmg+=3;
+    addText(player.x,player.y-30,'+3 damage — Hexed Sigil','#c58fff',2.5,true);
+    readyIf('q4');
+  } else if(kind==='pyrelord'){
+    player.speed+=12;
+    addText(player.x,player.y-30,'+12 speed — Ash Striders','#ffb36b',2.5,true);
+    readyIf('q5');
+  } else if(kind==='tyrant'){
+    state.portal={x:state.dbossRoom.cx*TS+TS/2, y:state.dbossRoom.cy*TS+TS/2};
+    state.won=true;
+    readyIf('q6');
+    sfx('quest');
+    state.mode='victory';
+  }
+}
+function updateBoss(b,dt){
+  const d=BDEF[b.kind], p=player;
+  b.flash-=dt; b.phase+=dt*4; b.atkCd-=dt;
+  for(const k in b.cd) b.cd[k]-=dt;
+  const kdec=Math.pow(0.02,dt);
+  b.x+=b.kb.x*dt; b.y+=b.kb.y*dt; b.kb.x*=kdec; b.kb.y*=kdec;
+  if(!b.enraged && b.hp<=b.maxHp*d.enrage){
+    b.enraged=true; b.spd*=1.35; sfx('bossroar'); shake(0.5,7);
+    addText(b.x,b.y-70,d.name+' is ENRAGED!','#ff4b2e',2,true);
+    if(b.kind==='tyrant') for(let i=0;i<2;i++){
+      const s=findFreeSpot(b.x+rnd(-60,60),b.y+rnd(-60,60),11);
+      makeEnemy('dslime',s.x,s.y,{minion:true});
+    }
+  }
+  const dp=dist(b.x,b.y,p.x,p.y), ang=Math.atan2(p.y-b.y,p.x-b.x);
+  if(b.telegraph>0){
+    b.telegraph-=dt;
+    if(b.telegraph<=0){
+      shake(0.5,10); sfx('slam'); burst(b.x,b.y,'#ff6a3d',30,220,0.8,4);
+      if(dp<b.telegraphR) hurtPlayer(b.dmg*1.45,b.x,b.y);
+      if(b.kind==='cindergolem') for(let i=0;i<8;i++) eBolt(b.x,b.y,i/8*TAU,210,b.dmg*0.8,'fire',0.75);
+      if(b.kind==='tyrant') for(let i=0;i<6;i++) eBolt(b.x,b.y,i/6*TAU+rnd(0.3),190,b.dmg*0.7,'fire',0.85);
+      b.cd.slam=b.enraged?2.4:3.6;
+    }
+  }
+  const chase=()=>{ if(dp<560) moveEntity(b,Math.cos(ang)*b.spd*dt,Math.sin(ang)*b.spd*dt); };
+  switch(b.kind){
+    case 'boneking':
+      chase();
+      if(b.cd.volley<=0 && dp<460){
+        b.cd.volley=b.enraged?2.2:2.9;
+        const n=b.enraged?5:3;
+        for(let i=0;i<n;i++) eBolt(b.x,b.y,ang+(i-(n-1)/2)*0.24,250,b.dmg*0.7,'bone',2.2);
+        sfx('arrow');
+      }
+      if(b.cd.summon<=0){
+        b.cd.summon=7;
+        if(enemies.filter(x=>x.minion).length<3){
+          for(let i=0;i<2;i++){
+            const s=findFreeSpot(b.x+rnd(-50,50),b.y+rnd(-50,50),11);
+            makeEnemy('skeleton',s.x,s.y,{minion:true});
+          }
+          sfx('summon'); burst(b.x,b.y,'#e8e2d0',12,90,0.5,3);
+        }
+      }
+      break;
+    case 'cindergolem':
+      if(b.cd.slam<=0 && dp<300){ b.cd.slam=99; b.telegraph=0.95; b.telegraphR=150; addText(b.x,b.y-50,'!','#ff4b2e',0.9,true); }
+      if(b.cd.rock<=0 && dp<520){ b.cd.rock=b.enraged?2.6:3.8; eBolt(b.x,b.y,ang,175,b.dmg*1.15,'rock',2.6); sfx('rock'); }
+      chase();
+      break;
+    case 'malachar':
+      if(dp<150) moveEntity(b,-Math.cos(ang)*b.spd*dt,-Math.sin(ang)*b.spd*dt);
+      else if(dp>270) moveEntity(b,Math.cos(ang)*b.spd*dt,Math.sin(ang)*b.spd*dt);
+      else { const s=Math.sin(b.phase*0.5); moveEntity(b,Math.cos(ang+Math.PI/2)*b.spd*0.6*s*dt,Math.sin(ang+Math.PI/2)*b.spd*0.6*s*dt); }
+      if(b.cd.volley<=0 && dp<480){
+        b.cd.volley=b.enraged?1.9:2.6;
+        const n=b.enraged?5:3;
+        for(let i=0;i<n;i++) eBolt(b.x,b.y,ang+(i-(n-1)/2)*0.22,255,b.dmg*0.75,'void',2);
+        sfx('fire');
+      }
+      if(b.cd.blink<=0 && dp>90){
+        b.cd.blink=7.5;
+        burst(b.x,b.y,'#c46bff',16,120,0.5,3);
+        const ba=rnd(TAU), r=rnd(190,260);
+        const s=findFreeSpot(p.x+Math.cos(ba)*r,p.y+Math.sin(ba)*r,b.r);
+        b.x=s.x; b.y=s.y; sfx('blink');
+        burst(b.x,b.y,'#c46bff',16,120,0.5,3);
+      }
+      if(b.cd.summon<=0){
+        b.cd.summon=8.5;
+        if(enemies.filter(x=>x.minion).length<3){
+          const n=b.enraged?3:2;
+          for(let i=0;i<n;i++){
+            const s=findFreeSpot(b.x+rnd(-50,50),b.y+rnd(-50,50),12);
+            makeEnemy(pick(['skeleton','wraith']),s.x,s.y,{minion:true});
+          }
+          sfx('summon'); burst(b.x,b.y,'#c46bff',12,90,0.5,3);
+        }
+      }
+      break;
+    case 'pyrelord':
+      if(b.dashT>0){
+        b.dashT-=dt;
+        moveEntity(b,Math.cos(b.dashA)*460*dt,Math.sin(b.dashA)*460*dt);
+        burst(b.x,b.y,'#ff8a3d',3,60,0.4,3);
+        if(dp<b.r+p.r+6 && b.atkCd<=0){ b.atkCd=0.9; hurtPlayer(b.dmg*1.3,b.x,b.y); }
+      } else if(b.telegraph>0){
+        b.telegraph-=dt;
+        if(b.telegraph<=0){ b.dashT=0.38; b.dashA=b.teleA; sfx('dash'); }
+      } else {
+        chase();
+        if(b.cd.dash<=0 && dp<420){ b.cd.dash=b.enraged?3.4:5; b.telegraph=0.7; b.teleA=ang; addText(b.x,b.y-46,'!','#ff4b2e',0.8,true); }
+        if(b.cd.rain<=0 && dp<520){
+          b.cd.rain=b.enraged?4:5.5;
+          for(let i=0;i<8;i++){
+            const aa=rnd(TAU), rr=rnd(60,240);
+            const sx=p.x+Math.cos(aa)*rr, sy=p.y+Math.sin(aa)*rr;
+            eBolt(sx,sy,ang,230,b.dmg*0.65,'fire',1.5);
+          }
+          sfx('fire');
+        }
+        if(b.enraged && b.cd.nova<=0){
+          b.cd.nova=7; sfx('nova');
+          for(let i=0;i<16;i++) eBolt(b.x,b.y,i/16*TAU,180,b.dmg*0.75,'fire',1.4);
+        }
+      }
+      break;
+    case 'tyrant':
+      if(b.cd.slam<=0 && dp<330){ b.cd.slam=99; b.telegraph=0.9; b.telegraphR=160; addText(b.x,b.y-50,'!','#ff4b2e',0.9,true); }
+      if(b.cd.volley<=0 && dp<520){
+        b.cd.volley=b.enraged?4.2:5.5;
+        const n=b.enraged?12:8;
+        for(let i=0;i<n;i++) eBolt(b.x,b.y,i/n*TAU+rnd(0.2),175,b.dmg*0.7,'fire',1.3);
+        sfx('fire');
+      }
+      chase();
+      break;
+  }
+  if(dp<b.r+p.r+4 && b.atkCd<=0){ b.atkCd=1.1; hurtPlayer(b.dmg,b.x,b.y); }
+}

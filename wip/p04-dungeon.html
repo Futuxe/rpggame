@@ -1,0 +1,113 @@
+/* ---------- dungeon generation (rooms + corridors + arenas) ---------- */
+function genDungeon(fl){
+  mapW=52+fl*10; mapH=52+fl*10;
+  tiles=new Uint8Array(mapW*mapH); tiles.fill(T_WALL);
+  tileVar=new Float32Array(mapW*mapH);
+  trees=[]; treeGrid=new Map(); rocks=[]; flowers=[]; torches=[]; chests=[]; buildings=[]; props=[]; shrines=[]; lavas=[]; entrance=null; returnPortal=null;
+  const rooms=[];
+  const overlap=(x,y,w,h)=>{
+    for(const r of rooms)
+      if(x < r.x+r.w+3 && x+w+3 > r.x && y < r.y+r.h+3 && y+h+3 > r.y) return true;
+    return false;
+  };
+  const nRooms = 8+fl*2;
+  let tries=0;
+  while(rooms.length<nRooms && tries++<500){
+    const w=6+((Math.random()*7)|0), h=5+((Math.random()*6)|0);
+    const x=2+((Math.random()*(mapW-w-4))|0), y=2+((Math.random()*(mapH-h-4))|0);
+    if(overlap(x,y,w,h)) continue;
+    rooms.push({x,y,w,h,cx:(x+w/2)|0,cy:(y+h/2)|0});
+  }
+  const carve=(tx,ty)=>{ if(tx>0&&ty>0&&tx<mapW-1&&ty<mapH-1) setTile(tx,ty,T_FLOOR); };
+  // connect rooms with wide L corridors
+  for(let i=1;i<rooms.length;i++){
+    const a=rooms[i-1], b=rooms[i];
+    let x=a.cx, y=a.cy;
+    while(x!==b.cx){ carve(x,y); carve(x,y+1); x += x<b.cx?1:-1; }
+    while(y!==b.cy){ carve(x,y); carve(x+1,y); y += y<b.cy?1:-1; }
+  }
+  for(const r of rooms)
+    for(let dy=0;dy<r.h;dy++)for(let dx=0;dx<r.w;dx++) carve(r.x+dx,r.y+dy);
+  /* --- boss arena (every floor has a guardian) --- */
+  const bw=fl===5?22:18, bh=fl===5?15:12;
+  let bx=(mapW-bw)/2|0, by=(mapH-bh)/2|0;
+  for(let t=0;t<120;t++){
+    const nx=2+((Math.random()*(mapW-bw-4))|0), ny=2+((Math.random()*(mapH-bh-4))|0);
+    if(!overlap(nx-2,ny-2,bw+4,bh+4)){ bx=nx; by=ny; break; }
+  }
+  const bossRoom={x:bx,y:by,w:bw,h:bh,cx:(bx+bw/2)|0,cy:(by+bh/2)|0};
+  for(let dy=0;dy<bh;dy++)for(let dx=0;dx<bw;dx++) carve(bx+dx,by+dy);
+  // magma ring around arenas on floors 2+ (corridor carves a safe entry)
+  if(fl>=2){
+    for(let dx=0;dx<bw;dx++){ setTile(bx+dx,by,T_LAVA); setTile(bx+dx,by+bh-1,T_LAVA); }
+    for(let dy=0;dy<bh;dy++){ setTile(bx,by+dy,T_LAVA); setTile(bx+bw-1,by+dy,T_LAVA); }
+  }
+  // connect arena to nearest room
+  let nr=rooms[0], nd=1e9;
+  for(const r of rooms){
+    const d=dist(r.cx,r.cy,bossRoom.cx,bossRoom.cy);
+    if(d<nd){ nd=d; nr=r; }
+  }
+  let x=nr.cx, y=nr.cy;
+  while(x!==bossRoom.cx){ carve(x,y); carve(x,y+1); x+= x<bossRoom.cx?1:-1; }
+  while(y!==bossRoom.cy){ carve(x,y); carve(x+1,y); y+= y<bossRoom.cy?1:-1; }
+  rooms.push(bossRoom);
+  /* --- variation + lava tile list --- */
+  for(let i=0;i<tiles.length;i++) tileVar[i]=hash2(i*1.37,i*0.71);
+  for(let i=0;i<tiles.length;i++)
+    if(tiles[i]===T_LAVA) lavas.push({x:(i%mapW)*TS+TS/2, y:((i/mapW)|0)*TS+TS/2});
+  // random lava lakes on floors 2+
+  if(fl>=2){
+    const cand=rooms.filter(r=>r!==bossRoom);
+    for(let i=0;i<fl;i++){
+      const r=pick(cand);
+      const lx=r.x+2+((Math.random()*(r.w-4))|0), ly=r.y+2+((Math.random()*(r.h-4))|0);
+      for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++)
+        if(hash2(lx+dx*3,ly+dy*5)>0.3 && tileAt(lx+dx,ly+dy)===T_FLOOR){ setTile(lx+dx,ly+dy,T_LAVA); lavas.push({x:(lx+dx)*TS+TS/2,y:(ly+dy)*TS+TS/2}); }
+    }
+  }
+  /* --- stairs --- */
+  const start=rooms[0];
+  setTile(start.cx,start.cy,T_STAIRSUP);
+  state.dstart={x:start.cx*TS+TS/2+TS, y:start.cy*TS+TS/2};
+  state.dbossRoom=bossRoom;
+  state.drooms=rooms;
+  // stairs down (not on the last floor)
+  let downRoom=null;
+  const others=rooms.slice(1).filter(r=>r!==bossRoom);
+  if(fl<MAXFLOOR && others.length){
+    downRoom=pick(others);
+    setTile(downRoom.cx,downRoom.cy,T_STAIRSDOWN);
+  }
+  /* --- shrines (challenge trials) --- */
+  const shrineRooms=others.filter(r=>r!==downRoom);
+  const nShr = fl>=3?2:1;
+  for(let i=0;i<nShr && shrineRooms.length;i++){
+    const idx=(Math.random()*shrineRooms.length)|0;
+    const r=shrineRooms.splice(idx,1)[0];
+    const id=fl+':'+r.cx+','+r.cy;
+    shrines.push({x:r.cx*TS+TS/2+rnd(-24,24), y:r.cy*TS+TS/2+rnd(-16,16), fl, active:false,
+      done:!!(state.doneShrines&&state.doneShrines.has(id)), left:0, id});
+  }
+  /* --- chests --- */
+  const chestRooms=others.filter(r=>r!==downRoom);
+  for(let i=0;i<2+fl && chestRooms.length;i++){
+    const r=pick(chestRooms);
+    const id=fl+':'+r.cx+','+r.cy;
+    if(chests.some(c=>c.id===id)) continue;
+    chests.push({x:r.cx*TS+TS/2+rnd(-22,22), y:r.cy*TS+TS/2+rnd(-14,14),
+      opened:!!(state.openedChests&&state.openedChests.has(id)), id});
+  }
+  /* --- torches on walls that face open floor --- */
+  for(let ty=1;ty<mapH-1;ty++)for(let tx=1;tx<mapW-1;tx++){
+    if(tileAt(tx,ty)!==T_WALL) continue;
+    const dirs=[[1,0],[-1,0],[0,1],[0,-1]];
+    for(const [dx,dy] of dirs){
+      if(tileAt(tx+dx,ty+dy)===T_FLOOR && hash2(tx*1.9,ty*2.3)<0.08){
+        torches.push({x:tx*TS+TS/2+dx*10, y:ty*TS+TS/2+dy*10, side:[dx,dy], fl:rnd(TAU)});
+        break;
+      }
+    }
+  }
+  return {rooms, bossRoom, downRoom};
+}

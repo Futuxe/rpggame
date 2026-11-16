@@ -1,0 +1,138 @@
+/* ---------------- HUD ---------------- */
+function drawHUD(){
+  const p=player;
+  ctx.fillStyle='rgba(10,12,18,0.72)';
+  roundRect(14,14,230,86,10); ctx.fill();
+  ctx.fillStyle='#ffd75e'; ctx.beginPath(); ctx.arc(38,40,14,0,TAU); ctx.fill();
+  ctx.fillStyle='#1a1a1a'; ctx.font='bold 13px system-ui'; ctx.textAlign='center';
+  ctx.fillText(p.level,38,45);
+  const bx=60,by=32,bw=170;
+  ctx.fillStyle='rgba(255,255,255,0.15)'; roundRect(bx,by,bw,12,6); ctx.fill();
+  const hpr=clamp(p.hp/p.maxHp,0,1);
+  ctx.fillStyle=hpr>0.35?'#4ec954':'#e05555';
+  roundRect(bx,by,bw*hpr,12,6); ctx.fill();
+  ctx.font='bold 10px system-ui'; ctx.fillStyle='#fff'; ctx.textAlign='left';
+  ctx.fillText(Math.ceil(p.hp)+' / '+p.maxHp, bx+4, by+10);
+  ctx.fillStyle='rgba(255,255,255,0.15)'; roundRect(bx,by+18,bw,8,4); ctx.fill();
+  ctx.fillStyle='#4aa3e0'; roundRect(bx,by+18,bw*clamp(p.xp/xpNeed(),0,1),8,4); ctx.fill();
+  ctx.font='bold 13px system-ui';
+  ctx.fillStyle='#ffd75e';
+  ctx.beginPath(); ctx.arc(bx+7,by+42,5,0,TAU); ctx.fill();
+  ctx.fillText(''+p.gold, bx+17, by+46);
+  ctx.fillStyle='#e05575';
+  roundRect(bx+78,by+37,7,11,2); ctx.fill();
+  ctx.fillStyle='#c8c8d0'; ctx.fillRect(bx+80,by+34,3,4);
+  ctx.fillStyle='#fff'; ctx.fillText('x'+p.potions, bx+90, by+47);
+  if(player.lightLvl>0){
+    ctx.fillStyle='#ffe08a'; ctx.font='10px system-ui';
+    ctx.fillText('Lantern Lv.'+player.lightLvl, bx+128, by+46);
+  }
+  ctx.fillStyle='#c9d1d9'; ctx.font='11px system-ui';
+  ctx.fillText('Q potion · E talk/interact · Space attack', 22, 92);
+
+  // quest tracker
+  const q=state.quest;
+  let qy=118;
+  const qline=(txt,col)=>{
+    ctx.fillStyle='rgba(10,12,18,0.6)'; roundRect(14,qy-13,240,20,6); ctx.fill();
+    ctx.fillStyle=col; ctx.font='bold 11px system-ui'; ctx.textAlign='left';
+    ctx.fillText(txt,22,qy+1); qy+=26;
+  };
+  if(q.state==='active'){
+    qline('◈ '+QUESTS[q.id].title+' — '+QUESTS[q.id].goal,'#7ee787');
+    if(q.id==='q1') qline('   '+q.prog+' / 8 slimes slain','#9ad1ff');
+    if(q.id==='q4'){
+      qline('   Cinder Golem: '+(state.flags.golem?'✓':'—')+'   Malachar: '+(state.flags.malachar?'✓':'—'),'#9ad1ff');
+    }
+  }
+  if(q.state==='ready') qline('◈ Return to Elder Maren!','#ffd75e');
+
+  // shrine challenge notice
+  const s=shrines.find(s=>s.active);
+  if(s){
+    ctx.fillStyle='rgba(20,14,4,0.7)'; roundRect(14,qy-13,240,20,6); ctx.fill();
+    ctx.fillStyle='#ffd75e'; ctx.font='bold 11px system-ui';
+    ctx.fillText('✦ Shrine trial — '+s.left+' guardians left',22,qy+1);
+    qy+=26;
+  }
+
+  // boss bar
+  if(state.boss){
+    const b=state.boss;
+    const w=Math.min(430,VW-300), x=(VW-w)/2;
+    ctx.fillStyle='rgba(10,12,18,0.75)'; roundRect(x-6,16,w+12,30,8); ctx.fill();
+    ctx.fillStyle='rgba(255,255,255,0.12)'; roundRect(x,24,w,12,6); ctx.fill();
+    ctx.fillStyle=b.enraged?'#ff4b2e':'#d8451e'; roundRect(x,24,w*clamp(b.hp/b.maxHp,0,1),12,6); ctx.fill();
+    ctx.fillStyle='#ffd75e'; ctx.font='bold 11px system-ui'; ctx.textAlign='center';
+    ctx.fillText(BDEF[b.kind].name+(b.enraged?' — ENRAGED':''),VW/2,52);
+  }
+
+  // minimap
+  if(minimap){
+    const s2=Math.min(138,VH*0.2), mx=VW-s2-16, my=16;
+    ctx.fillStyle='rgba(10,12,18,0.75)'; roundRect(mx-5,my-5,s2+10,s2+10,8); ctx.fill();
+    ctx.imageSmoothingEnabled=false;
+    ctx.drawImage(minimap,mx,my,s2,s2);
+    ctx.imageSmoothingEnabled=true;
+    const sc=s2/(mapW*TS);
+    const dot=(x,y,c,sz)=>{ ctx.fillStyle=c; ctx.fillRect(mx+x*sc-sz/2,my+y*sc-sz/2,sz,sz); };
+    if(state.floor===0) for(const n of npcs) dot(n.x,n.y,'#9ad1ff',3);
+    for(const c2 of chests) if(!c2.opened) dot(c2.x,c2.y,'#ffd75e',2.5);
+    for(const sh of shrines) dot(sh.x,sh.y, sh.done?'#5a5a62':sh.active?'#ff9a3d':'#7ee7ff',3);
+    if(state.portal) dot(state.portal.x,state.portal.y,'#c46bff',4);
+    if(state.boss) dot(state.boss.x,state.boss.y,'#ff4b2e',5);
+    dot(player.x,player.y,'#fff',4);
+    ctx.strokeStyle='rgba(255,255,255,0.25)'; ctx.lineWidth=1;
+    ctx.strokeRect(mx+cam.x*sc,my+cam.y*sc,VW*sc,VH*sc);
+    ctx.fillStyle='#c9d1d9'; ctx.font='10px system-ui'; ctx.textAlign='center';
+    ctx.fillText(state.floor===0?'Surface — Emberfall':'Floor '+state.floor+' · '+FLNAMES[state.floor],mx+s2/2,my+s2+13);
+  }
+
+  if(p.hurtFlash>0){
+    ctx.fillStyle=`rgba(200,30,30,${p.hurtFlash*0.8})`;
+    ctx.fillRect(0,0,VW,VH);
+  }
+  const vg=ctx.createRadialGradient(VW/2,VH/2,Math.min(VW,VH)*0.42,VW/2,VH/2,Math.max(VW,VH)*0.72);
+  vg.addColorStop(0,'rgba(0,0,0,0)'); vg.addColorStop(1,'rgba(0,0,0,0.42)');
+  ctx.fillStyle=vg; ctx.fillRect(0,0,VW,VH);
+}
+function drawDialog(){
+  const D=state.dialog; if(!D) return;
+  const w=Math.min(640,VW-60), h=150+(D.options?D.options.length*26:0);
+  const x=(VW-w)/2, y=VH-h-30;
+  ctx.fillStyle='rgba(8,10,16,0.88)';
+  roundRect(x,y,w,h,12); ctx.fill();
+  ctx.strokeStyle='rgba(255,215,94,0.4)'; ctx.lineWidth=2;
+  roundRect(x+3,y+3,w-6,h-6,10); ctx.stroke();
+  ctx.fillStyle='#5a3f9e';
+  ctx.beginPath(); ctx.arc(x+40,y+52,24,0,TAU); ctx.fill();
+  ctx.fillStyle='#f0c49a';
+  ctx.beginPath(); ctx.arc(x+40,y+48,15,0,TAU); ctx.fill();
+  ctx.fillStyle='#222';
+  ctx.beginPath(); ctx.arc(x+34,y+46,2,0,TAU); ctx.arc(x+46,y+46,2,0,TAU); ctx.fill();
+  ctx.fillStyle='#ffd75e'; ctx.font='bold 15px system-ui'; ctx.textAlign='left';
+  ctx.fillText(D.name,x+76,y+34);
+  ctx.fillStyle='#e8e8f0'; ctx.font='14px system-ui';
+  wrapText(D.lines[D.page],x+76,y+58,w-100,19);
+  if(!D.options){
+    ctx.fillStyle='rgba(255,255,255,0.55)'; ctx.font='11px system-ui'; ctx.textAlign='right';
+    ctx.fillText((D.page<D.lines.length-1?'E / Enter — next':'E / Enter — close'), x+w-16, y+h-14);
+  } else {
+    ctx.font='bold 13px system-ui'; ctx.textAlign='left';
+    D.options.forEach((o,i)=>{
+      const oy=y+96+i*26;
+      ctx.fillStyle='rgba(255,255,255,0.08)'; roundRect(x+70,oy-15,w-100,22,5); ctx.fill();
+      ctx.fillStyle='#ffd75e'; ctx.fillText('['+(i+1)+']',x+80,oy+1);
+      ctx.fillStyle='#e8e8f0'; ctx.fillText(o.label,x+108,oy+1);
+    });
+  }
+}
+function wrapText(txt,x,y,maxW,lh){
+  const words=txt.split(' '); let line='', yy=y;
+  for(const w of words){
+    const t=line?line+' '+w:w;
+    if(ctx.measureText(t).width>maxW){ ctx.fillText(line,x,yy); line=w; yy+=lh; }
+    else line=t;
+  }
+  ctx.fillText(line,x,yy);
+}

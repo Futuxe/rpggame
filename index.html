@@ -13,18 +13,18 @@
 <script>
 'use strict';
 /* ============================================================
-   EMBERFALL — a tiny action RPG
+   EMBERFALL v2 — THE EMBER DEPTHS — a tiny action RPG
+   Surface world + 5 dungeon floors, 5 bosses, shrine trials,
+   elites, chests, torch lighting, lava.
    Everything (world, art, sound) is generated in code.
+   Built from: wip/p01..p10 via wip/build.ps1
    ============================================================ */
 
 const cvs = document.getElementById('game');
 const ctx = cvs.getContext('2d');
 let VW = 0, VH = 0;
-function resize(){
-  VW = cvs.width = window.innerWidth;
-  VH = cvs.height = window.innerHeight;
-}
-window.addEventListener('resize', resize); resize();
+function resize(){ VW = cvs.width = window.innerWidth; VH = cvs.height = window.innerHeight; lightCvs.width=VW; lightCvs.height=VH; }
+window.addEventListener('resize', resize);
 
 /* ---------------- utils ---------------- */
 const TAU = Math.PI*2;
@@ -34,7 +34,6 @@ const dist=(ax,ay,bx,by)=>Math.hypot(ax-bx,ay-by);
 const rnd=(a=1,b)=> b===undefined? Math.random()*a : a+Math.random()*(b-a);
 const pick=a=>a[(Math.random()*a.length)|0];
 
-/* deterministic value noise */
 function hash2(x,y){
   let n = Math.sin(x*127.1 + y*311.7)*43758.5453;
   return n - Math.floor(n);
@@ -85,73 +84,86 @@ function sfx(n){
     case 'arrow':  tone(700,0.06,'sawtooth',0.05,-300); break;
     case 'quest':  [659,784,988].forEach((f,i)=>tone(f,0.14,'square',0.1,0,i*0.1)); break;
     case 'buy':    tone(660,0.08,'square',0.1); tone(880,0.1,'square',0.1,0,0.07); break;
+    case 'chest':  tone(392,0.1,'triangle',0.1); tone(523,0.12,'triangle',0.1,0,0.09); tone(784,0.16,'triangle',0.12,0,0.18); break;
+    case 'stairs': tone(300,0.3,'triangle',0.1,-150); tone(200,0.3,'triangle',0.08,-100,0.12); break;
+    case 'summon': tone(340,0.28,'sawtooth',0.1,-200); noiseBurst(0.2,0.08); break;
     case 'denied': tone(160,0.15,'square',0.12,-40); break;
     case 'bossroar': tone(70,0.7,'sawtooth',0.25,30); noiseBurst(0.6,0.18); break;
+    case 'shrine': tone(392,0.22,'sine',0.12,60); tone(523,0.3,'sine',0.1,80,0.1); noiseBurst(0.25,0.06); break;
+    case 'reward': [784,988,1175].forEach((f,i)=>tone(f,0.15,'triangle',0.12,0,i*0.09)); break;
+    case 'blink':  tone(180,0.22,'sine',0.12,520); break;
+    case 'fire':   tone(300,0.12,'sawtooth',0.07,-140); noiseBurst(0.08,0.05); break;
+    case 'rock':   tone(120,0.16,'square',0.12,-60); noiseBurst(0.12,0.1); break;
+    case 'dash':   tone(420,0.16,'sawtooth',0.1,-280); break;
+    case 'nova':   tone(140,0.5,'sawtooth',0.18,-90); noiseBurst(0.45,0.16); break;
   }
 }
-const SCALE=[220,261,293,329,392,440,523,587]; // pentatonic-ish
+const SCALE=[220,261,293,329,392,440,523,587];
 function musicTick(dt){
   if(!AC||muted||state.mode!=='play') return;
   musicT-=dt;
   if(musicT<=0){
     musicT=rnd(0.5,1.1);
     const n=SCALE[(Math.random()*SCALE.length)|0];
-    tone(n*(Math.random()<0.25?0.5:1),rnd(0.5,1.2),'triangle',0.028);
-    if(Math.random()<0.3) tone(110,0.8,'sine',0.04);
+    const minor = state.floor>0;
+    tone(minor? n*0.89 : n, rnd(0.5,1.2),'triangle',0.028);
+    if(Math.random()<0.3) tone(minor?55:110,0.8,'sine',0.04);
   }
 }
 
 /* ---------------- world ---------------- */
-const TS=32, W=96, H=96;
-const T_WATER=0, T_SAND=1, T_GRASS=2, T_CORRUPT=3;
-const tiles=new Uint8Array(W*H);
-const variation=new Float32Array(W*H);
-const trees=[], treeGrid=new Map(), rocks=[], flowers=[];
-const buildings=[], props=[]; // props = decorative (stall etc.)
+const TS=32;
+const T_WATER=0, T_SAND=1, T_GRASS=2, T_CORRUPT=3, T_WALL=4, T_FLOOR=5, T_LAVA=6, T_STAIRSDOWN=7, T_STAIRSUP=8;
+const SOLID = t => t===T_WATER || t===T_WALL;
+const MAXFLOOR=5;
+const FLNAMES={1:'The Bone Hollows',2:'The Molten Gaol',3:'The Wailing Crypt',4:'The Ashen Deep',5:'The Ember Throne'};
+const FLOORBOSS={1:'boneking',2:'cindergolem',3:'malachar',4:'pyrelord',5:'tyrant'};
+let mapW=96, mapH=96;
+let tiles=null, tileVar=null;
 const VILLAGE={x:48,y:48,r:11};
 const CORRUPT={x:76,y:76,r:24};
-const TSZ=TS; // alias
+let trees=[], treeGrid=new Map(), rocks=[], flowers=[], torches=[], chests=[], buildings=[], props=[], shrines=[], lavas=[];
+let entrance=null, returnPortal=null;
 
-function tileAt(tx,ty){ return (tx<0||ty<0||tx>=W||ty>=H)?T_WATER:tiles[ty*W+tx]; }
-function walkableTile(tx,ty){ return tileAt(tx,ty)!==T_WATER; }
+function tileAt(tx,ty){ return (tx<0||ty<0||tx>=mapW||ty>=mapH)?T_WALL:tiles[ty*mapW+tx]; }
+function setTile(tx,ty,t){ if(tx>=0&&ty>=0&&tx<mapW&&ty<mapH) tiles[ty*mapW+tx]=t; }
+function tileAtPx(x,y){ return tileAt(Math.floor(x/TS),Math.floor(y/TS)); }
 
-function genWorld(){
-  for(let y=0;y<H;y++)for(let x=0;x<W;x++){
+/* ---------- surface generation ---------- */
+function genSurface(){
+  mapW=96; mapH=96;
+  tiles=new Uint8Array(mapW*mapH);
+  tileVar=new Float32Array(mapW*mapH);
+  trees=[]; treeGrid=new Map(); rocks=[]; flowers=[]; torches=[]; chests=[]; buildings=[]; props=[]; shrines=[]; lavas=[]; returnPortal=null;
+  for(let y=0;y<mapH;y++)for(let x=0;x<mapW;x++){
     const n=fbm(x*0.075+13.7, y*0.075+5.1);
     let t = n<0.345 ? T_WATER : T_GRASS;
-    // village flatten
     if(dist(x,y,VILLAGE.x,VILLAGE.y) < VILLAGE.r) t = T_GRASS;
-    // corrupt heart is always land
     if(dist(x,y,CORRUPT.x,CORRUPT.y) < 20) t = T_GRASS;
-    // corrupt zone
     if(t===T_GRASS){
       const d=dist(x,y,CORRUPT.x,CORRUPT.y);
       const edge = CORRUPT.r*(0.72+0.5*vnoise(x*0.09,y*0.09));
       if(d<edge) t=T_CORRUPT;
     }
-    tiles[y*W+x]=t;
-    variation[y*W+x]=hash2(x*3.3,y*7.7);
+    tiles[y*mapW+x]=t;
+    tileVar[y*mapW+x]=hash2(x*3.3,y*7.7);
   }
-  // beaches
-  for(let y=0;y<H;y++)for(let x=0;x<W;x++){
-    if(tiles[y*W+x]!==T_GRASS && tiles[y*W+x]!==T_CORRUPT) continue;
+  for(let y=0;y<mapH;y++)for(let x=0;x<mapW;x++){
+    if(tiles[y*mapW+x]!==T_GRASS && tiles[y*mapW+x]!==T_CORRUPT) continue;
     let nearWater=false;
     for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++)
       if(tileAt(x+dx,y+dy)===T_WATER) nearWater=true;
-    if(nearWater) tiles[y*W+x]=T_SAND;
+    if(nearWater) tiles[y*mapW+x]=T_SAND;
   }
-  // trees, rocks, flowers
-  for(let y=1;y<H-1;y++)for(let x=1;x<W-1;x++){
-    const t=tiles[y*W+x];
+  for(let y=1;y<mapH-1;y++)for(let x=1;x<mapW-1;x++){
+    const t=tiles[y*mapW+x];
     const px=x*TS+TS/2, py=y*TS+TS/2;
     const inVillage = dist(x,y,VILLAGE.x,VILLAGE.y)<VILLAGE.r;
     const n=vnoise(x*0.16+40, y*0.16+9);
     if((t===T_GRASS||t===T_CORRUPT) && !inVillage){
-      if(n>0.72 && hash2(x*9,y*4)<0.55){
-        const tr={x:px+rnd(-6,6), y:py+rnd(-6,6), cr:5.5, corrupt:t===T_CORRUPT, sway:rnd(TAU), big:hash2(x,y)>0.6};
-        trees.push(tr);
-        const key=x+','+y; const list=treeGrid.get(key);
-        if(list) list.push(tr); else treeGrid.set(key,[tr]);
+      if(n>0.72 && hash2(x*9,y*4)<0.8){
+        const tr={x:px+rnd(-6,6), y:py+rnd(-6,6), cr:9, corrupt:t===T_CORRUPT, sway:rnd(TAU), big:hash2(x,y)>0.6};
+        trees.push(tr); treeGrid.set(x+','+y,tr);
       } else if(n<0.2 && hash2(x*5,y*2)<0.15){
         rocks.push({x:px+rnd(-5,5), y:py+rnd(-5,5), r:rnd(5,8), corrupt:t===T_CORRUPT});
       }
@@ -159,24 +171,144 @@ function genWorld(){
     if(t===T_GRASS && hash2(x*7.1,y*3.3)<0.13 && !inVillage)
       flowers.push({x:px+rnd(-12,12), y:py+rnd(-12,12), c:pick(['#f2d16b','#e26d8f','#c9e26d','#e2a23c','#b98fe2']), sway:rnd(TAU)});
   }
-  // village buildings (tile coords -> px rects)
   const hx=VILLAGE.x, hy=VILLAGE.y;
-  buildings.push({x:(hx-4)*TS, y:(hy-5)*TS, w:3*TS, h:2.6*TS, roof:'#8a4b32', wall:'#d8c49a', door:true});   // elder hall
-  buildings.push({x:(hx+2)*TS, y:(hy-4.6)*TS, w:2.4*TS, h:2.2*TS, roof:'#6e6a8f', wall:'#cfc4a8', door:true}); // house
-  buildings.push({x:(hx-1)*TS, y:(hy+4)*TS,  w:2.2*TS, h:2*TS,   roof:'#4e7a5c', wall:'#d3c8ab', door:true}); // house
-  // merchant stall (decor + collision)
+  buildings.push({x:(hx-4)*TS, y:(hy-5)*TS, w:3*TS, h:2.6*TS, roof:'#8a4b32', wall:'#d8c49a', door:true});
+  buildings.push({x:(hx+2)*TS, y:(hy-4.6)*TS, w:2.4*TS, h:2.2*TS, roof:'#6e6a8f', wall:'#cfc4a8', door:true});
+  buildings.push({x:(hx-1)*TS, y:(hy+4)*TS,  w:2.2*TS, h:2*TS,   roof:'#4e7a5c', wall:'#d3c8ab', door:true});
   props.push({type:'stall', x:(hx+4.6)*TS, y:(hy+1.5)*TS});
   buildings.push({x:(hx+4.3)*TS, y:(hy+1.2)*TS, w:1.4*TS, h:1.1*TS, roof:'#b3402f', wall:'#7a5a3a', door:false, stall:true});
-  // well
   props.push({type:'well', x:(hx+0.2)*TS, y:(hy-0.4)*TS});
   buildings.push({x:(hx-0.1)*TS, y:(hy-0.7)*TS, w:1*TS, h:1*TS, roof:'#555', wall:'#888', door:false, well:true});
+  // dungeon entrance in the heart of the corruption
+  const ex=CORRUPT.x, ey=CORRUPT.y;
+  for(let dy=-2;dy<=2;dy++)for(let dx=-2;dx<=2;dx++){
+    const t=tileAt(ex+dx,ey+dy);
+    if(t===T_WATER) setTile(ex+dx,ey+dy, dx===0&&dy===0?T_STAIRSDOWN:T_FLOOR);
+  }
+  setTile(ex,ey,T_STAIRSDOWN);
+  entrance={x:ex*TS+TS/2, y:ey*TS+TS/2};
 }
 
+/* ---------- dungeon generation (rooms + corridors + arenas) ---------- */
+function genDungeon(fl){
+  mapW=52+fl*10; mapH=52+fl*10;
+  tiles=new Uint8Array(mapW*mapH); tiles.fill(T_WALL);
+  tileVar=new Float32Array(mapW*mapH);
+  trees=[]; treeGrid=new Map(); rocks=[]; flowers=[]; torches=[]; chests=[]; buildings=[]; props=[]; shrines=[]; lavas=[]; entrance=null; returnPortal=null;
+  const rooms=[];
+  const overlap=(x,y,w,h)=>{
+    for(const r of rooms)
+      if(x < r.x+r.w+3 && x+w+3 > r.x && y < r.y+r.h+3 && y+h+3 > r.y) return true;
+    return false;
+  };
+  const nRooms = 8+fl*2;
+  let tries=0;
+  while(rooms.length<nRooms && tries++<500){
+    const w=6+((Math.random()*7)|0), h=5+((Math.random()*6)|0);
+    const x=2+((Math.random()*(mapW-w-4))|0), y=2+((Math.random()*(mapH-h-4))|0);
+    if(overlap(x,y,w,h)) continue;
+    rooms.push({x,y,w,h,cx:(x+w/2)|0,cy:(y+h/2)|0});
+  }
+  const carve=(tx,ty)=>{ if(tx>0&&ty>0&&tx<mapW-1&&ty<mapH-1) setTile(tx,ty,T_FLOOR); };
+  // connect rooms with wide L corridors
+  for(let i=1;i<rooms.length;i++){
+    const a=rooms[i-1], b=rooms[i];
+    let x=a.cx, y=a.cy;
+    while(x!==b.cx){ carve(x,y); carve(x,y+1); x += x<b.cx?1:-1; }
+    while(y!==b.cy){ carve(x,y); carve(x+1,y); y += y<b.cy?1:-1; }
+  }
+  for(const r of rooms)
+    for(let dy=0;dy<r.h;dy++)for(let dx=0;dx<r.w;dx++) carve(r.x+dx,r.y+dy);
+  /* --- boss arena (every floor has a guardian) --- */
+  const bw=fl===5?22:18, bh=fl===5?15:12;
+  let bx=(mapW-bw)/2|0, by=(mapH-bh)/2|0;
+  for(let t=0;t<120;t++){
+    const nx=2+((Math.random()*(mapW-bw-4))|0), ny=2+((Math.random()*(mapH-bh-4))|0);
+    if(!overlap(nx-2,ny-2,bw+4,bh+4)){ bx=nx; by=ny; break; }
+  }
+  const bossRoom={x:bx,y:by,w:bw,h:bh,cx:(bx+bw/2)|0,cy:(by+bh/2)|0};
+  for(let dy=0;dy<bh;dy++)for(let dx=0;dx<bw;dx++) carve(bx+dx,by+dy);
+  // magma ring around arenas on floors 2+ (corridor carves a safe entry)
+  if(fl>=2){
+    for(let dx=0;dx<bw;dx++){ setTile(bx+dx,by,T_LAVA); setTile(bx+dx,by+bh-1,T_LAVA); }
+    for(let dy=0;dy<bh;dy++){ setTile(bx,by+dy,T_LAVA); setTile(bx+bw-1,by+dy,T_LAVA); }
+  }
+  // connect arena to nearest room
+  let nr=rooms[0], nd=1e9;
+  for(const r of rooms){
+    const d=dist(r.cx,r.cy,bossRoom.cx,bossRoom.cy);
+    if(d<nd){ nd=d; nr=r; }
+  }
+  let x=nr.cx, y=nr.cy;
+  while(x!==bossRoom.cx){ carve(x,y); carve(x,y+1); x+= x<bossRoom.cx?1:-1; }
+  while(y!==bossRoom.cy){ carve(x,y); carve(x+1,y); y+= y<bossRoom.cy?1:-1; }
+  rooms.push(bossRoom);
+  /* --- variation + lava tile list --- */
+  for(let i=0;i<tiles.length;i++) tileVar[i]=hash2(i*1.37,i*0.71);
+  for(let i=0;i<tiles.length;i++)
+    if(tiles[i]===T_LAVA) lavas.push({x:(i%mapW)*TS+TS/2, y:((i/mapW)|0)*TS+TS/2});
+  // random lava lakes on floors 2+
+  if(fl>=2){
+    const cand=rooms.filter(r=>r!==bossRoom);
+    for(let i=0;i<fl;i++){
+      const r=pick(cand);
+      const lx=r.x+2+((Math.random()*(r.w-4))|0), ly=r.y+2+((Math.random()*(r.h-4))|0);
+      for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++)
+        if(hash2(lx+dx*3,ly+dy*5)>0.3 && tileAt(lx+dx,ly+dy)===T_FLOOR){ setTile(lx+dx,ly+dy,T_LAVA); lavas.push({x:(lx+dx)*TS+TS/2,y:(ly+dy)*TS+TS/2}); }
+    }
+  }
+  /* --- stairs --- */
+  const start=rooms[0];
+  setTile(start.cx,start.cy,T_STAIRSUP);
+  state.dstart={x:start.cx*TS+TS/2+TS, y:start.cy*TS+TS/2};
+  state.dbossRoom=bossRoom;
+  state.drooms=rooms;
+  // stairs down (not on the last floor)
+  let downRoom=null;
+  const others=rooms.slice(1).filter(r=>r!==bossRoom);
+  if(fl<MAXFLOOR && others.length){
+    downRoom=pick(others);
+    setTile(downRoom.cx,downRoom.cy,T_STAIRSDOWN);
+  }
+  /* --- shrines (challenge trials) --- */
+  const shrineRooms=others.filter(r=>r!==downRoom);
+  const nShr = fl>=3?2:1;
+  for(let i=0;i<nShr && shrineRooms.length;i++){
+    const idx=(Math.random()*shrineRooms.length)|0;
+    const r=shrineRooms.splice(idx,1)[0];
+    const id=fl+':'+r.cx+','+r.cy;
+    shrines.push({x:r.cx*TS+TS/2+rnd(-24,24), y:r.cy*TS+TS/2+rnd(-16,16), fl, active:false,
+      done:!!(state.doneShrines&&state.doneShrines.has(id)), left:0, id});
+  }
+  /* --- chests --- */
+  const chestRooms=others.filter(r=>r!==downRoom);
+  for(let i=0;i<2+fl && chestRooms.length;i++){
+    const r=pick(chestRooms);
+    const id=fl+':'+r.cx+','+r.cy;
+    if(chests.some(c=>c.id===id)) continue;
+    chests.push({x:r.cx*TS+TS/2+rnd(-22,22), y:r.cy*TS+TS/2+rnd(-14,14),
+      opened:!!(state.openedChests&&state.openedChests.has(id)), id});
+  }
+  /* --- torches on walls that face open floor --- */
+  for(let ty=1;ty<mapH-1;ty++)for(let tx=1;tx<mapW-1;tx++){
+    if(tileAt(tx,ty)!==T_WALL) continue;
+    const dirs=[[1,0],[-1,0],[0,1],[0,-1]];
+    for(const [dx,dy] of dirs){
+      if(tileAt(tx+dx,ty+dy)===T_FLOOR && hash2(tx*1.9,ty*2.3)<0.08){
+        torches.push({x:tx*TS+TS/2+dx*10, y:ty*TS+TS/2+dy*10, side:[dx,dy], fl:rnd(TAU)});
+        break;
+      }
+    }
+  }
+  return {rooms, bossRoom, downRoom};
+}
+
+/* ---------- collision ---------- */
 function circleFree(x,y,r,ignoreTrees){
   const minTx=Math.floor((x-r)/TS), maxTx=Math.floor((x+r)/TS);
   const minTy=Math.floor((y-r)/TS), maxTy=Math.floor((y+r)/TS);
   for(let ty=minTy;ty<=maxTy;ty++)for(let tx=minTx;tx<=maxTx;tx++){
-    if(walkableTile(tx,ty)) continue;
+    if(!SOLID(tileAt(tx,ty))) continue;
     const cx=clamp(x,tx*TS,(tx+1)*TS), cy=clamp(y,ty*TS,(ty+1)*TS);
     const dx=cx-x, dy=cy-y;
     if(dx*dx+dy*dy < r*r) return false;
@@ -185,11 +317,9 @@ function circleFree(x,y,r,ignoreTrees){
     const gr=Math.ceil(r/TS)+1;
     const tx0=Math.floor(x/TS), ty0=Math.floor(y/TS);
     for(let dy=-gr;dy<=gr;dy++)for(let dx=-gr;dx<=gr;dx++){
-      const list=treeGrid.get((tx0+dx)+','+(ty0+dy));
-      if(list) for(const t of list){
-        const ddx=t.x-x, ddy=t.y-y, rr=r+t.cr;
-        if(ddx*ddx+ddy*ddy<rr*rr) return false;
-      }
+      const t=treeGrid.get((tx0+dx)+','+(ty0+dy));
+      if(t){ const ddx=t.x-x, ddy=t.y-y, rr=r+t.cr;
+        if(ddx*ddx+ddy*ddy<rr*rr) return false; }
     }
   }
   for(const b of buildings){
@@ -198,7 +328,20 @@ function circleFree(x,y,r,ignoreTrees){
     if(dx*dx+dy*dy < r*r) return false;
   }
   for(const rk of rocks){
-    const dx=rk.x-x, dy=rk.y-y, rr=r+rk.r*0.55;
+    const dx=rk.x-x, dy=rk.y-y, rr=r+rk.r*0.8;
+    if(dx*dx+dy*dy<rr*rr) return false;
+  }
+  if(state.floor===0) for(const n of npcs){
+    const dx=n.x-x, dy=n.y-y, rr=r+n.r*0.8;
+    if(dx*dx+dy*dy<rr*rr) return false;
+  }
+  for(const c of chests){
+    if(c.opened) continue;
+    const dx=c.x-x, dy=c.y-y, rr=r+10;
+    if(dx*dx+dy*dy<rr*rr) return false;
+  }
+  for(const s of shrines){
+    const dx=s.x-x, dy=s.y-y, rr=r+10;
     if(dx*dx+dy*dy<rr*rr) return false;
   }
   return true;
@@ -206,12 +349,18 @@ function circleFree(x,y,r,ignoreTrees){
 function moveEntity(e,dx,dy){
   if(dx!==0){
     if(circleFree(e.x+dx,e.y,e.r)) e.x+=dx;
-    else if(circleFree(e.x+dx*0.35,e.y,e.r)) e.x+=dx*0.35; // slide along walls instead of hard-stop
+    else if(circleFree(e.x+dx*0.35,e.y,e.r)) e.x+=dx*0.35; // wall-slide assist
   }
   if(dy!==0){
     if(circleFree(e.x,e.y+dy,e.r)) e.y+=dy;
     else if(circleFree(e.x,e.y+dy*0.35,e.r)) e.y+=dy*0.35;
   }
+}
+/* enemies refuse to step into lava unless they fly */
+function avoidLava(e,dx,dy){
+  if(e.flies || tileAtPx(e.x+dx,e.y+dy)!==T_LAVA){ moveEntity(e,dx,dy); return; }
+  if(dx!==0 && tileAtPx(e.x+dx,e.y)!==T_LAVA) moveEntity(e,dx,0);
+  else if(dy!==0 && tileAtPx(e.x,e.y+dy)!==T_LAVA) moveEntity(e,0,dy);
 }
 function findFreeSpot(x,y,r=12){
   if(circleFree(x,y,r)) return {x,y};
@@ -228,16 +377,18 @@ function findFreeSpot(x,y,r=12){
 /* ---------------- game state ---------------- */
 const state={
   mode:'title', // title | play | dead | victory
-  time:0, shakeT:0, shakeMag:0, hintT:22, won:false, firstVictory:true,
-  paused:false, bossSpawned:false, bossDefeated:false, boss:null,
-  quest1:{state:'none', kills:0, need:8},
-  quest2:{state:'none'},
-  dialog:null, // {name, lines, page, options}
+  time:0, floor:0, paused:false, dbg:false,
+  shakeT:0, shakeMag:0, spawnT:0,
+  boss:null, bossesDead:{}, portal:null, trans:null, dialog:null,
+  quest:{id:'q1', state:'none', prog:0},
+  flags:{descended:false, golem:false, malachar:false},
+  openedChests:new Set(), doneShrines:new Set(),
+  won:false, firstVictory:true,
 };
 const player={
   x:0, y:0, r:10, speed:175, hp:100, maxHp:100,
   level:1, xp:0, gold:25, potions:2,
-  dmg:12, armor:0, swordBonus:0,
+  dmg:12, armor:0, swordBonus:0, swordLvl:0, armorLvl:0, lightLvl:0,
   face:{x:1,y:0}, walkT:0, moving:false,
   atkCd:0, swingT:0, swingDir:0, invulnT:0, hurtFlash:0,
 };
@@ -245,50 +396,35 @@ let enemies=[], arrows=[], drops=[], parts=[], texts=[];
 const npcs=[];
 let killCount=0, playTime=0;
 
-function xpNeed(){ return Math.floor(60*Math.pow(player.level,1.45)); }
-
-function spawnNPCs(){
-  const vx=VILLAGE.x*TS+TS/2, vy=VILLAGE.y*TS+TS/2;
-  npcs.length=0;
-  npcs.push({name:'Elder Maren', kind:'elder', x:vx-2.2*TS, y:vy-2.2*TS, r:11, c:'#7a5cc4', robe:'#5a3f9e'});
-  npcs.push({name:'Finn the Trader', kind:'merchant', x:vx+4.6*TS+TS*0.7, y:vy+2.8*TS, r:11, c:'#d8a24a', robe:'#a8712c'});
-  npcs.push({name:'Little Osk', kind:'kid', x:vx+1.6*TS, y:vy+2.2*TS, r:9, c:'#6cc46c', robe:'#3e8f3e'});
+/* ---------------- quests ---------------- */
+const QUESTS={
+  q1:{title:'Slimy Situation',  goal:'Slay 8 slimes around Emberfall'},
+  q2:{title:'Into the Depths',  goal:'Descend into the Ember Depths'},
+  q3:{title:'King of Bones',    goal:'Defeat the Bone King (Floor 1)'},
+  q4:{title:'Fire Below',       goal:'Defeat the Cinder Golem & Malachar (Floors 2-3)'},
+  q5:{title:'Champion of Ash',  goal:'Defeat Pyrelord Vex (Floor 4)'},
+  q6:{title:'The Ember Tyrant', goal:'Defeat the Ember Tyrant (Floor 5)'},
+};
+const QUEST_ORDER=['q1','q2','q3','q4','q5','q6'];
+function questDone(id){
+  const f=state.flags;
+  switch(id){
+    case 'q1': return state.quest.prog>=8;
+    case 'q2': return !!f.descended;
+    case 'q3': return !!state.bossesDead[1];
+    case 'q4': return !!(f.golem&&f.malachar);
+    case 'q5': return !!state.bossesDead[4];
+    case 'q6': return !!state.bossesDead[5];
+  }
+  return false;
 }
-
-function spawnEnemy(){
-  if(state.mode!=='play') return;
-  const cap = Math.min(26, 14+player.level*2);
-  if(enemies.length>=cap) return;
-  const ang=rnd(TAU), d=rnd(560,940);
-  let x=player.x+Math.cos(ang)*d, y=player.y+Math.sin(ang)*d;
-  const tx=Math.floor(x/TS), ty=Math.floor(y/TS);
-  if(!walkableTile(tx,ty) || !circleFree(x,y,12)) return;
-  if(dist(x/TS,y/TS,VILLAGE.x,VILLAGE.y) < VILLAGE.r+3) return;
-  const dv=dist(tx,ty,VILLAGE.x,VILLAGE.y);
-  const inCorrupt = tileAt(tx,ty)===T_CORRUPT;
-  let type;
-  if(inCorrupt) type = Math.random()<0.65 ? 'wraith' : 'skeleton';
-  else if(dv>30) type = Math.random()<0.55 ? 'skeleton' : 'slime';
-  else type='slime';
-  const boost = 1 + (player.level-1)*0.12;
-  const def={
-    slime:   {hp:26, spd:62,  dmg:8,  xp:12, r:11},
-    skeleton:{hp:52, spd:74,  dmg:11, xp:24, r:11},
-    wraith:  {hp:88, spd:96,  dmg:15, xp:40, r:12},
-  }[type];
-  enemies.push({type, x, y, r:def.r, hp:def.hp*boost, maxHp:def.hp*boost, spd:def.spd,
-    dmg:def.dmg*boost, xp:def.xp, atkCd:rnd(0.5,1.5), shootCd:rnd(1,2.5),
-    wanderT:0, wa:rnd(TAU), flash:0, phase:rnd(TAU), kb:{x:0,y:0}});
-}
-
-function spawnBoss(){
-  const bx=CORRUPT.x*TS+TS/2, by=CORRUPT.y*TS+TS/2;
-  state.boss={x:bx,y:by,r:26,hp:650,maxHp:650,spd:52,dmg:26,xp:500,
-    atkCd:2.5, slamCd:3.2, telegraph:0, telegraphR:0, flash:0, phase:rnd(TAU), enraged:false, kb:{x:0,y:0}};
-  state.bossSpawned=true;
-  sfx('bossroar');
-  addText(bx,by-60,'THE EMBER TYRANT AWAKENS','#ff6a3d',2.2,true);
-  state.shakeT=0.6; state.shakeMag=8;
+function readyIf(id){
+  const q=state.quest;
+  if(q.id!==id || q.state!=='active') return;
+  if(!questDone(id)) return;
+  q.state='ready';
+  addText(player.x,player.y-30,'Return to Elder Maren!','#7ee787',2.5,true);
+  sfx('quest');
 }
 
 /* ---------------- effects ---------------- */
@@ -302,35 +438,134 @@ function burst(x,y,color,n=8,spd=90,life=0.5,size=3){
   }
 }
 function shake(t,m){ state.shakeT=Math.max(state.shakeT,t); state.shakeMag=Math.max(state.shakeMag,m); }
+function xpNeed(){ return Math.floor(60*Math.pow(player.level,1.45)); }
+
+/* ---------------- NPCs ---------------- */
+function spawnNPCs(){
+  const vx=VILLAGE.x*TS+TS/2, vy=VILLAGE.y*TS+TS/2;
+  npcs.length=0;
+  npcs.push({name:'Elder Maren', kind:'elder', x:vx-2.2*TS, y:vy-2.2*TS, r:11, c:'#7a5cc4', robe:'#5a3f9e'});
+  npcs.push({name:'Finn the Trader', kind:'merchant', x:vx+4.6*TS+TS*0.7, y:vy+2.8*TS, r:11, c:'#d8a24a', robe:'#a8712c'});
+  npcs.push({name:'Little Osk', kind:'kid', x:vx+1.6*TS, y:vy+2.2*TS, r:9, c:'#6cc46c', robe:'#3e8f3e'});
+}
+
+/* ---------------- enemies ---------------- */
+const EDEF={
+  slime:   {hp:26,  spd:62,  dmg:8,  xp:12, r:11, aggro:300},
+  dslime:  {hp:40,  spd:66,  dmg:10, xp:16, r:11, aggro:320},
+  bat:     {hp:20,  spd:128, dmg:7,  xp:12, r:8,  aggro:380, flies:true},
+  skeleton:{hp:56,  spd:72,  dmg:11, xp:26, r:11, aggro:340, shoots:true},
+  wraith:  {hp:92,  spd:98,  dmg:15, xp:42, r:12, aggro:430},
+  golem:   {hp:185, spd:38,  dmg:22, xp:66, r:14, aggro:360, kbr:0.25},
+  necro:   {hp:80,  spd:56,  dmg:12, xp:58, r:12, aggro:520, casts:true},
+};
+const SPAWNS={
+  1:['dslime','bat','skeleton'],
+  2:['skeleton','bat','golem','dslime'],
+  3:['skeleton','wraith','necro','bat'],
+  4:['wraith','necro','golem','bat'],
+  5:['wraith','necro','golem','skeleton','bat'],
+};
+function makeEnemy(type,x,y,o={}){
+  const d=EDEF[type], fl=Math.max(0,state.floor);
+  const boost=(1+fl*0.22)*(1+(player.level-1)*0.06);
+  const elite=o.elite||(!o.minion&&!o.shrineRef&&fl>0&&Math.random()<0.08+fl*0.02);
+  const em={
+    type,x,y,r:d.r,hp:d.hp*boost,maxHp:d.hp*boost,
+    spd:d.spd*(elite?0.92:1),
+    dmg:d.dmg*boost*(elite?1.5:1),
+    xp:Math.round(d.xp*(elite?2.5:1)),
+    atkCd:rnd(0.5,1.5),shootCd:rnd(1,2.5),castCd:rnd(2,4),summonCd:rnd(4,7),
+    wanderT:0,wa:rnd(TAU),flash:0,phase:rnd(TAU),kb:{x:0,y:0},
+    flies:!!d.flies,kbr:d.kbr||0,shoots:!!d.shoots,casts:!!d.casts,
+    minion:!!o.minion,necroMinion:false,shrineRef:o.shrineRef||null,elite,
+  };
+  if(elite) em.r*=1.35;
+  enemies.push(em);
+  return em;
+}
+function spawnEnemySurface(){
+  if(state.mode!=='play') return;
+  const cap = Math.min(26, 14+player.level*2);
+  if(enemies.length>=cap) return;
+  const ang=rnd(TAU), d=rnd(560,940);
+  let x=player.x+Math.cos(ang)*d, y=player.y+Math.sin(ang)*d;
+  const tx=Math.floor(x/TS), ty=Math.floor(y/TS);
+  if(!circleFree(x,y,12)) return;
+  if(dist(tx,ty,VILLAGE.x,VILLAGE.y) < VILLAGE.r+3) return;
+  const dv=dist(tx,ty,VILLAGE.x,VILLAGE.y);
+  const inCorrupt = tileAt(tx,ty)===T_CORRUPT;
+  let type;
+  if(inCorrupt) type = Math.random()<0.65 ? 'wraith' : 'skeleton';
+  else if(dv>30) type = Math.random()<0.55 ? 'skeleton' : 'slime';
+  else type='slime';
+  makeEnemy(type,x,y);
+}
+function spawnEnemyFloor(){
+  const fl=state.floor, cap=10+fl*3;
+  if(enemies.length>=cap || !state.drooms) return;
+  const pool=state.drooms.filter(r=>r!==state.dbossRoom || state.bossesDead[fl]);
+  if(!pool.length) return;
+  const r=pick(pool);
+  const x=(r.x+1+Math.random()*(r.w-2))*TS, y=(r.y+1+Math.random()*(r.h-2))*TS;
+  const s=findFreeSpot(x,y,12);
+  if(dist(s.x,s.y,player.x,player.y)<460) return;
+  makeEnemy(pick(SPAWNS[fl]),s.x,s.y);
+}
+function populateFloor(){
+  enemies=[]; arrows=[]; drops=[];
+  const fl=state.floor;
+  if(fl===0) return;
+  const pool=(state.drooms||[]).filter(r=>r!==state.dbossRoom);
+  if(!pool.length) return;
+  for(let i=0;i<8+fl*3;i++){
+    const r=pick(pool);
+    const x=(r.x+1+Math.random()*(r.w-2))*TS, y=(r.y+1+Math.random()*(r.h-2))*TS;
+    const s=findFreeSpot(x,y,12);
+    if(dist(s.x,s.y,player.x,player.y)<380) continue;
+    makeEnemy(pick(SPAWNS[fl]),s.x,s.y);
+  }
+}
 
 /* ---------------- combat ---------------- */
 function damageEnemy(e,dmg,kx,ky){
   e.hp-=dmg; e.flash=0.15;
-  e.kb.x+=kx; e.kb.y+=ky;
+  const kf=1-(e.kbr||0);
+  e.kb.x+=kx*kf; e.kb.y+=ky*kf;
   addText(e.x+rnd(-8,8), e.y-e.r-6, Math.round(dmg), '#ffd75e');
   burst(e.x,e.y,'#ff7b54',6,110,0.35,2.5);
   sfx('hit');
   if(e.hp<=0) killEnemy(e);
 }
 function killEnemy(e){
-  enemies.splice(enemies.indexOf(e),1);
-  burst(e.x,e.y, e.type==='slime'?'#5fce62': e.type==='skeleton'?'#e8e8e8':'#b06ce2', 14,140,0.6,3.5);
+  const idx=enemies.indexOf(e); if(idx<0) return;
+  enemies.splice(idx,1);
+  burst(e.x,e.y, e.type==='slime'?'#5fce62': e.type==='skeleton'?'#e8e8e8': e.type==='bat'?'#8a6ea0':'#b06ce2', 14,140,0.6,3.5);
   sfx('die');
   gainXp(e.xp);
   killCount++;
-  if(state.quest1.state==='active' && e.type==='slime'){
-    state.quest1.kills++;
-    if(state.quest1.kills>=state.quest1.need){
-      state.quest1.state='ready';
-      addText(player.x,player.y-30,'Quest ready! Return to Elder Maren','#7ee787',2,true);
-      sfx('quest');
+  if(e.shrineRef){
+    e.shrineRef.left--;
+    if(e.shrineRef.left<=0 && e.shrineRef.active){
+      e.shrineRef.active=false; e.shrineRef.done=true;
+      state.doneShrines.add(e.shrineRef.id);
+      sfx('reward');
+      addText(e.shrineRef.x,e.shrineRef.y-30,'Shrine cleared — take its blessing!','#7ee787',2.4,true);
+      burst(e.shrineRef.x,e.shrineRef.y,'#7ee787',30,180,0.9,4);
+      for(let i=0;i<8;i++) drops.push({type:'coin',x:e.shrineRef.x+rnd(-26,26),y:e.shrineRef.y+rnd(-26,26),val:Math.ceil(rnd(4,9)),t:rnd(TAU),vx:rnd(-70,70),vy:rnd(-70,70)});
+      for(let i=0;i<2;i++) drops.push({type:'potion',x:e.shrineRef.x+rnd(-20,20),y:e.shrineRef.y+rnd(-20,20),t:rnd(TAU),vx:0,vy:0});
+      for(let i=0;i<2;i++) drops.push({type:'gem',x:e.shrineRef.x+rnd(-16,16),y:e.shrineRef.y+rnd(-16,16),val:Math.ceil(rnd(25,60)),t:rnd(TAU),vx:rnd(-40,40),vy:rnd(-40,40)});
     }
   }
-  // drops
+  if(state.quest.id==='q1' && state.quest.state==='active' && e.type==='slime'){
+    state.quest.prog++;
+    if(state.quest.prog>=8){ state.quest.state='ready';
+      addText(player.x,player.y-30,'Quest ready! Return to Elder Maren','#7ee787',2,true); sfx('quest'); }
+  }
   const ncoins=1+((Math.random()*3)|0);
   for(let i=0;i<ncoins;i++) drops.push({type:'coin',x:e.x+rnd(-8,8),y:e.y+rnd(-8,8),val:Math.ceil(rnd(1,5)),t:rnd(TAU),vx:rnd(-40,40),vy:rnd(-40,40)});
-  if(Math.random()<0.12) drops.push({type:'potion',x:e.x,y:e.y,t:rnd(TAU),vx:0,vy:0});
-  if(Math.random()<0.28) drops.push({type:'gem',x:e.x+rnd(-6,6),y:e.y+rnd(-6,6),val:Math.ceil(e.xp*0.4),t:rnd(TAU),vx:rnd(-30,30),vy:rnd(-30,30)});
+  if(Math.random()<0.12 || e.elite) drops.push({type:'potion',x:e.x,y:e.y,t:rnd(TAU),vx:0,vy:0});
+  if(Math.random()<0.28 || e.elite) drops.push({type:'gem',x:e.x+rnd(-6,6),y:e.y+rnd(-6,6),val:Math.ceil(e.xp*0.4),t:rnd(TAU),vx:rnd(-30,30),vy:rnd(-30,30)});
 }
 function gainXp(v){
   player.xp+=v;
@@ -377,177 +612,208 @@ function doAttack(dirAng){
     }
   }
 }
+
+/* ---------------- enemy bolts ---------------- */
+function eBolt(x,y,ang,spd,dmg,kind,life=2){
+  arrows.push({x,y,vx:Math.cos(ang)*spd,vy:Math.sin(ang)*spd,life,dmg,kind});
+}
+
+/* ---------------- bosses ---------------- */
+const BDEF={
+  boneking:   {name:'THE BONE KING',          hp:380,  spd:64, dmg:18, r:20, xp:260, enrage:0.35},
+  cindergolem:{name:'THE CINDER GOLEM',      hp:560,  spd:42, dmg:24, r:24, xp:340, enrage:0.40},
+  malachar:   {name:'MALACHAR THE NECRO LORD',hp:640,  spd:58, dmg:16, r:20, xp:420, enrage:0.40},
+  pyrelord:   {name:'PYRELORD VEX',          hp:780,  spd:74, dmg:20, r:22, xp:520, enrage:0.45},
+  tyrant:     {name:'THE EMBER TYRANT',      hp:1150, spd:56, dmg:26, r:28, xp:700, enrage:0.50},
+};
+function spawnBoss(kind,x,y){
+  const d=BDEF[kind];
+  const boost=1+(state.floor-1)*0.12+(player.level-1)*0.03;
+  state.boss={kind,x,y,r:d.r,hp:d.hp*boost,maxHp:d.hp*boost,spd:d.spd,dmg:d.dmg,xp:d.xp,
+    atkCd:1.2,telegraph:0,telegraphR:0,teleA:0,dashT:0,dashA:0,
+    cd:{volley:2.5,slam:3.5,summon:5,blink:7,rain:5,nova:4,rock:2.5,dash:4},
+    flash:0,phase:rnd(TAU),enraged:false,kb:{x:0,y:0}};
+  sfx('bossroar'); shake(0.6,8);
+  addText(x,y-70,d.name+' AWAKENS','#ff6a3d',2.4,true);
+}
 function damageBoss(dmg,kx,ky){
   const b=state.boss; if(!b) return;
   b.hp-=dmg; b.flash=0.15;
-  b.kb.x+=kx*0.25; b.kb.y+=ky*0.25;
+  b.kb.x+=kx*0.22; b.kb.y+=ky*0.22;
   addText(b.x+rnd(-10,10),b.y-b.r-10,Math.round(dmg),'#ffd75e');
   burst(b.x,b.y,'#ff9a3d',8,130,0.4,3);
   sfx('hit');
-  if(!b.enraged && b.hp<b.maxHp*0.5){
-    b.enraged=true; b.spd*=1.35; sfx('bossroar');
-    addText(b.x,b.y-70,'The Tyrant is ENRAGED!','#ff4b2e',2,true);
-    for(let i=0;i<2;i++) spawnMinion(b);
-  }
   if(b.hp<=0) defeatBoss();
 }
-function spawnMinion(b){
-  const a=rnd(TAU);
-  enemies.push({type:'slime',x:b.x+Math.cos(a)*50,y:b.y+Math.sin(a)*50,r:11,
-    hp:40,maxHp:40,spd:70,dmg:10,xp:15,atkCd:1,shootCd:9,wanderT:0,wa:0,flash:0,phase:rnd(TAU),kb:{x:0,y:0}});
-}
 function defeatBoss(){
-  const b=state.boss;
+  const b=state.boss, kind=b.kind;
   burst(b.x,b.y,'#ff6a3d',60,260,1.4,5);
   burst(b.x,b.y,'#ffd75e',40,200,1.2,4);
   shake(0.8,12); sfx('slam'); sfx('level');
-  addText(b.x,b.y-40,'THE EMBER TYRANT FALLS!','#ffd75e',3,true);
-  state.boss=null; state.bossDefeated=true;
-  gainXp(500);
-  for(let i=0;i<14;i++) drops.push({type:'coin',x:b.x+rnd(-30,30),y:b.y+rnd(-30,30),val:Math.ceil(rnd(5,20)),t:rnd(TAU),vx:rnd(-80,80),vy:rnd(-80,80)});
-  drops.push({type:'potion',x:b.x,y:b.y+20,t:0,vx:0,vy:0});
-  if(state.quest2.state==='active'){ state.quest2.state='ready';
-    addText(player.x,player.y-30,'Return to Elder Maren...','#7ee787',2.5,true); }
-  state.mode='victory'; state.won=true;
+  addText(b.x,b.y-40,BDEF[kind].name+' FALLS!','#ffd75e',3,true);
+  gainXp(b.xp); killCount++;
+  for(let i=0;i<12;i++) drops.push({type:'coin',x:b.x+rnd(-30,30),y:b.y+rnd(-30,30),val:Math.ceil(rnd(6,18)),t:rnd(TAU),vx:rnd(-80,80),vy:rnd(-80,80)});
+  for(let i=0;i<2;i++) drops.push({type:'potion',x:b.x+rnd(-20,20),y:b.y+rnd(-20,20),t:rnd(TAU),vx:0,vy:0});
+  for(let i=0;i<3;i++) drops.push({type:'gem',x:b.x+rnd(-24,24),y:b.y+rnd(-24,24),val:Math.ceil(rnd(60,140)),t:rnd(TAU),vx:rnd(-60,60),vy:rnd(-60,60)});
+  state.boss=null;
+  state.bossesDead[state.floor]=true;
+  bossReward(kind);
 }
-
-/* ---------------- update ---------------- */
-const keys={};
-let mouse={x:0,y:0,down:false};
-
-function update(dt){
-  state.time+=dt;
-  musicTick(dt);
-  if(state.shakeT>0) state.shakeT-=dt;
-  if(state.hintT>0) state.hintT-=dt;
-
-  // particles / texts always animate
-  for(const p of parts){ p.life-=dt; p.x+=p.vx*dt; p.y+=p.vy*dt; p.vy+=p.grav*dt; p.vx*=0.98; }
-  parts=parts.filter(p=>p.life>0);
-  for(const t of texts){ t.life-=dt; t.y-=26*dt; }
-  texts=texts.filter(t=>t.life>0);
-
-  if(state.mode!=='play' || state.paused) return;
-  playTime+=dt;
-
-  /* --- player --- */
-  const p=player;
-  p.atkCd-=dt; p.swingT-=dt; p.invulnT-=dt; p.hurtFlash-=dt;
-  let mx=0,my=0;
-  const canMove = !state.dialog;
-  if(canMove){
-    if(keys['w']||keys['arrowup']) my-=1;
-    if(keys['s']||keys['arrowdown']) my+=1;
-    if(keys['a']||keys['arrowleft']) mx-=1;
-    if(keys['d']||keys['arrowright']) mx+=1;
+function bossReward(kind){
+  const f=state.flags;
+  if(kind==='boneking'){
+    player.maxHp+=15; player.hp+=15;
+    addText(player.x,player.y-30,'+15 max HP — Bone Charm','#7ee787',2.5,true);
+    readyIf('q3');
+  } else if(kind==='cindergolem'){
+    f.golem=true; player.armor+=1;
+    addText(player.x,player.y-30,'+1 Armor — Cinder Plate','#9ad1ff',2.5,true);
+    readyIf('q4');
+  } else if(kind==='malachar'){
+    f.malachar=true; player.dmg+=3;
+    addText(player.x,player.y-30,'+3 damage — Hexed Sigil','#c58fff',2.5,true);
+    readyIf('q4');
+  } else if(kind==='pyrelord'){
+    player.speed+=12;
+    addText(player.x,player.y-30,'+12 speed — Ash Striders','#ffb36b',2.5,true);
+    readyIf('q5');
+  } else if(kind==='tyrant'){
+    state.portal={x:state.dbossRoom.cx*TS+TS/2, y:state.dbossRoom.cy*TS+TS/2};
+    state.won=true;
+    readyIf('q6');
+    sfx('quest');
+    state.mode='victory';
   }
-  p.moving = mx!==0||my!==0;
-  if(p.moving){
-    const l=Math.hypot(mx,my); mx/=l; my/=l;
-    moveEntity(p,mx*p.speed*dt,my*p.speed*dt);
-    p.face.x=mx; p.face.y=my;
-    p.walkT+=dt*10;
-  } else p.walkT=0;
-  // continuous attack while mouse held
-  if(mouse.down && canMove) doAttack(Math.atan2(mouse.y+cam.y-p.y, mouse.x+cam.x-p.x));
-  // safety net: never stay trapped inside collision
-  if(!circleFree(p.x,p.y,p.r)){ const s=findFreeSpot(p.x,p.y,p.r); p.x=s.x; p.y=s.y; }
-
-  /* --- enemies --- */
-  const villagePx=VILLAGE.x*TS, villagePy=VILLAGE.y*TS;
-  for(const e of [...enemies]){
-    e.flash-=dt; e.atkCd-=dt; e.shootCd-=dt; e.phase+=dt*6;
-    e.x+=e.kb.x*dt; e.y+=e.kb.y*dt; e.kb.x*=Math.pow(0.02,dt); e.kb.y*=Math.pow(0.02,dt);
-    const d=dist(e.x,e.y,p.x,p.y);
-    const inSafe = dist(e.x,e.y,villagePx,villagePy) < VILLAGE.r*TS;
-    if(inSafe){
-      const a=Math.atan2(e.y-villagePy,e.x-villagePx);
-      moveEntity(e,Math.cos(a)*e.spd*1.4*dt,Math.sin(a)*e.spd*1.4*dt);
-      continue;
-    }
-    const aggro = e.type==='wraith'?420:300;
-    if(d<aggro && d>0){
-      const a=Math.atan2(p.y-e.y,p.x-e.x);
-      moveEntity(e,Math.cos(a)*e.spd*dt,Math.sin(a)*e.spd*dt);
-      if(e.type==='skeleton' && d<250 && d>70 && e.shootCd<=0){
-        e.shootCd=1.9; sfx('arrow');
-        arrows.push({x:e.x,y:e.y,vx:Math.cos(a)*230,vy:Math.sin(a)*230,life:2.4,dmg:e.dmg*0.8});
-      }
-      if(d<e.r+p.r+3 && e.atkCd<=0){
-        e.atkCd=0.85; hurtPlayer(e.dmg,e.x,e.y);
-      }
-    } else {
-      e.wanderT-=dt;
-      if(e.wanderT<=0){ e.wanderT=rnd(1,2.6); e.wa=rnd(TAU); }
-      moveEntity(e,Math.cos(e.wa)*e.spd*0.35*dt,Math.sin(e.wa)*e.spd*0.35*dt);
+}
+function updateBoss(b,dt){
+  const d=BDEF[b.kind], p=player;
+  b.flash-=dt; b.phase+=dt*4; b.atkCd-=dt;
+  for(const k in b.cd) b.cd[k]-=dt;
+  const kdec=Math.pow(0.02,dt);
+  b.x+=b.kb.x*dt; b.y+=b.kb.y*dt; b.kb.x*=kdec; b.kb.y*=kdec;
+  if(!b.enraged && b.hp<=b.maxHp*d.enrage){
+    b.enraged=true; b.spd*=1.35; sfx('bossroar'); shake(0.5,7);
+    addText(b.x,b.y-70,d.name+' is ENRAGED!','#ff4b2e',2,true);
+    if(b.kind==='tyrant') for(let i=0;i<2;i++){
+      const s=findFreeSpot(b.x+rnd(-60,60),b.y+rnd(-60,60),11);
+      makeEnemy('dslime',s.x,s.y,{minion:true});
     }
   }
-
-  /* --- boss --- */
-  if(state.boss){
-    const b=state.boss;
-    b.flash-=dt; b.atkCd-=dt; b.slamCd-=dt; b.phase+=dt*4;
-    b.x+=b.kb.x*dt; b.y+=b.kb.y*dt; b.kb.x*=Math.pow(0.02,dt); b.kb.y*=Math.pow(0.02,dt);
-    const d=dist(b.x,b.y,p.x,p.y);
-    if(d<520){
-      if(b.telegraph>0){
+  const dp=dist(b.x,b.y,p.x,p.y), ang=Math.atan2(p.y-b.y,p.x-b.x);
+  if(b.telegraph>0){
+    b.telegraph-=dt;
+    if(b.telegraph<=0){
+      shake(0.5,10); sfx('slam'); burst(b.x,b.y,'#ff6a3d',30,220,0.8,4);
+      if(dp<b.telegraphR) hurtPlayer(b.dmg*1.45,b.x,b.y);
+      if(b.kind==='cindergolem') for(let i=0;i<8;i++) eBolt(b.x,b.y,i/8*TAU,210,b.dmg*0.8,'fire',0.75);
+      if(b.kind==='tyrant') for(let i=0;i<6;i++) eBolt(b.x,b.y,i/6*TAU+rnd(0.3),190,b.dmg*0.7,'fire',0.85);
+      b.cd.slam=b.enraged?2.4:3.6;
+    }
+  }
+  const chase=()=>{ if(dp<560) moveEntity(b,Math.cos(ang)*b.spd*dt,Math.sin(ang)*b.spd*dt); };
+  switch(b.kind){
+    case 'boneking':
+      chase();
+      if(b.cd.volley<=0 && dp<460){
+        b.cd.volley=b.enraged?2.2:2.9;
+        const n=b.enraged?5:3;
+        for(let i=0;i<n;i++) eBolt(b.x,b.y,ang+(i-(n-1)/2)*0.24,250,b.dmg*0.7,'bone',2.2);
+        sfx('arrow');
+      }
+      if(b.cd.summon<=0){
+        b.cd.summon=7;
+        if(enemies.filter(x=>x.minion).length<3){
+          for(let i=0;i<2;i++){
+            const s=findFreeSpot(b.x+rnd(-50,50),b.y+rnd(-50,50),11);
+            makeEnemy('skeleton',s.x,s.y,{minion:true});
+          }
+          sfx('summon'); burst(b.x,b.y,'#e8e2d0',12,90,0.5,3);
+        }
+      }
+      break;
+    case 'cindergolem':
+      if(b.cd.slam<=0 && dp<300){ b.cd.slam=99; b.telegraph=0.95; b.telegraphR=150; addText(b.x,b.y-50,'!','#ff4b2e',0.9,true); }
+      if(b.cd.rock<=0 && dp<520){ b.cd.rock=b.enraged?2.6:3.8; eBolt(b.x,b.y,ang,175,b.dmg*1.15,'rock',2.6); sfx('rock'); }
+      chase();
+      break;
+    case 'malachar':
+      if(dp<150) moveEntity(b,-Math.cos(ang)*b.spd*dt,-Math.sin(ang)*b.spd*dt);
+      else if(dp>270) moveEntity(b,Math.cos(ang)*b.spd*dt,Math.sin(ang)*b.spd*dt);
+      else { const s=Math.sin(b.phase*0.5); moveEntity(b,Math.cos(ang+Math.PI/2)*b.spd*0.6*s*dt,Math.sin(ang+Math.PI/2)*b.spd*0.6*s*dt); }
+      if(b.cd.volley<=0 && dp<480){
+        b.cd.volley=b.enraged?1.9:2.6;
+        const n=b.enraged?5:3;
+        for(let i=0;i<n;i++) eBolt(b.x,b.y,ang+(i-(n-1)/2)*0.22,255,b.dmg*0.75,'void',2);
+        sfx('fire');
+      }
+      if(b.cd.blink<=0 && dp>90){
+        b.cd.blink=7.5;
+        burst(b.x,b.y,'#c46bff',16,120,0.5,3);
+        const ba=rnd(TAU), r=rnd(190,260);
+        const s=findFreeSpot(p.x+Math.cos(ba)*r,p.y+Math.sin(ba)*r,b.r);
+        b.x=s.x; b.y=s.y; sfx('blink');
+        burst(b.x,b.y,'#c46bff',16,120,0.5,3);
+      }
+      if(b.cd.summon<=0){
+        b.cd.summon=8.5;
+        if(enemies.filter(x=>x.minion).length<3){
+          const n=b.enraged?3:2;
+          for(let i=0;i<n;i++){
+            const s=findFreeSpot(b.x+rnd(-50,50),b.y+rnd(-50,50),12);
+            makeEnemy(pick(['skeleton','wraith']),s.x,s.y,{minion:true});
+          }
+          sfx('summon'); burst(b.x,b.y,'#c46bff',12,90,0.5,3);
+        }
+      }
+      break;
+    case 'pyrelord':
+      if(b.dashT>0){
+        b.dashT-=dt;
+        moveEntity(b,Math.cos(b.dashA)*460*dt,Math.sin(b.dashA)*460*dt);
+        burst(b.x,b.y,'#ff8a3d',3,60,0.4,3);
+        if(dp<b.r+p.r+6 && b.atkCd<=0){ b.atkCd=0.9; hurtPlayer(b.dmg*1.3,b.x,b.y); }
+      } else if(b.telegraph>0){
         b.telegraph-=dt;
-        if(b.telegraph<=0){
-          // SLAM!
-          shake(0.5,10); sfx('slam');
-          burst(b.x,b.y,'#ff6a3d',30,220,0.8,4);
-          if(dist(b.x,b.y,p.x,p.y)<b.telegraphR) hurtPlayer(b.dmg*1.4,b.x,b.y);
-          b.slamCd=b.enraged?2.4:3.6;
-        }
+        if(b.telegraph<=0){ b.dashT=0.38; b.dashA=b.teleA; sfx('dash'); }
       } else {
-        const a=Math.atan2(p.y-b.y,p.x-b.x);
-        moveEntity(b,Math.cos(a)*b.spd*dt,Math.sin(a)*b.spd*dt);
-        if(d<b.r+p.r+4 && b.atkCd<=0){ b.atkCd=1.1; hurtPlayer(b.dmg,b.x,b.y); }
-        if(d<340 && b.slamCd<=0){
-          b.telegraph=0.9; b.telegraphR=140;
-          addText(b.x,b.y-50,'!','#ff4b2e',0.9,true);
+        chase();
+        if(b.cd.dash<=0 && dp<420){ b.cd.dash=b.enraged?3.4:5; b.telegraph=0.7; b.teleA=ang; addText(b.x,b.y-46,'!','#ff4b2e',0.8,true); }
+        if(b.cd.rain<=0 && dp<520){
+          b.cd.rain=b.enraged?4:5.5;
+          for(let i=0;i<8;i++){
+            const aa=rnd(TAU), rr=rnd(60,240);
+            const sx=p.x+Math.cos(aa)*rr, sy=p.y+Math.sin(aa)*rr;
+            eBolt(sx,sy,ang,230,b.dmg*0.65,'fire',1.5);
+          }
+          sfx('fire');
         }
-        if(b.enraged && Math.random()<dt*0.35){
-          burst(b.x+rnd(-20,20),b.y+rnd(-20,20),'#ff6a3d',4,80,0.6,3);
+        if(b.enraged && b.cd.nova<=0){
+          b.cd.nova=7; sfx('nova');
+          for(let i=0;i<16;i++) eBolt(b.x,b.y,i/16*TAU,180,b.dmg*0.75,'fire',1.4);
         }
       }
-    }
-  } else if(!state.bossSpawned && !state.bossDefeated){
-    if(dist(p.x/TS,p.y/TS,CORRUPT.x,CORRUPT.y)<14) spawnBoss();
+      break;
+    case 'tyrant':
+      if(b.cd.slam<=0 && dp<330){ b.cd.slam=99; b.telegraph=0.9; b.telegraphR=160; addText(b.x,b.y-50,'!','#ff4b2e',0.9,true); }
+      if(b.cd.volley<=0 && dp<520){
+        b.cd.volley=b.enraged?4.2:5.5;
+        const n=b.enraged?12:8;
+        for(let i=0;i<n;i++) eBolt(b.x,b.y,i/n*TAU+rnd(0.2),175,b.dmg*0.7,'fire',1.3);
+        sfx('fire');
+      }
+      chase();
+      break;
   }
-
-  /* --- arrows --- */
-  for(const a of [...arrows]){
-    a.life-=dt; a.x+=a.vx*dt; a.y+=a.vy*dt;
-    if(a.life<=0 || !circleFree(a.x,a.y,3,true)){ arrows.splice(arrows.indexOf(a),1); continue; }
-    if(dist(a.x,a.y,p.x,p.y)<p.r+4){ hurtPlayer(a.dmg,a.x-a.vx,a.y-a.vy); arrows.splice(arrows.indexOf(a),1); }
-  }
-
-  /* --- drops --- */
-  for(const d of [...drops]){
-    d.t+=dt*4;
-    d.x+=d.vx*dt; d.y+=d.vy*dt; d.vx*=0.9; d.vy*=0.9;
-    const dd=dist(d.x,d.y,p.x,p.y);
-    if(dd<70){ const a=Math.atan2(p.y-d.y,p.x-d.x); const pull=clamp((70-dd)*8,60,320); d.x+=Math.cos(a)*pull*dt; d.y+=Math.sin(a)*pull*dt; }
-    if(dd<p.r+10){
-      drops.splice(drops.indexOf(d),1);
-      if(d.type==='coin'){ player.gold+=d.val; addText(d.x,d.y-10,'+'+d.val+'g','#ffd75e',0.7); sfx('coin'); }
-      else if(d.type==='potion'){ player.potions++; addText(d.x,d.y-10,'+1 potion','#ff7b8f',0.9); sfx('potion'); }
-      else { gainXp(d.val); sfx('xp'); }
-    }
-  }
-
-  /* --- spawn timer --- */
-  state.spawnT=(state.spawnT||0)-dt;
-  if(state.spawnT<=0){ state.spawnT=1.2; spawnEnemy(); }
+  if(dp<b.r+p.r+4 && b.atkCd<=0){ b.atkCd=1.1; hurtPlayer(b.dmg,b.x,b.y); }
 }
 
+/* ---------------- potions ---------------- */
 function drinkPotion(){
   if(state.mode!=='play') return;
   if(player.potions<=0){ addText(player.x,player.y-26,'No potions!','#ff9a9a'); sfx('denied'); return; }
   if(player.hp>=player.maxHp){ addText(player.x,player.y-26,'Already at full health','#c9d1d9'); return; }
-  player.potions--; player.hp=Math.min(player.maxHp,player.hp+50);
-  addText(player.x,player.y-26,'+50 HP','#7ee787'); sfx('potion');
+  player.potions--; player.hp=Math.min(player.maxHp,player.hp+60);
+  addText(player.x,player.y-26,'+60 HP','#7ee787'); sfx('potion');
   burst(player.x,player.y,'#7ee787',10,90,0.6,3);
 }
 
@@ -559,61 +825,77 @@ function nearNPC(){
 function openDialog(name,lines,options){
   state.dialog={name,lines,page:0,options:options||null};
 }
+const QUEST_CLAIM={
+  q1(){ player.gold+=100; player.potions+=2; return '+100 gold, +2 potions. The Depths await...'; },
+  q2(){ player.gold+=150; player.potions+=1; return '+150 gold, +1 potion. Sharpen your blade.'; },
+  q3(){ player.gold+=200; player.armor+=1; return '+200 gold, +1 armor. The fires below grow hotter.'; },
+  q4(){ player.gold+=250; player.potions+=2; return '+250 gold, +2 potions. Ash storms brew on Floor 4.'; },
+  q5(){ player.gold+=150; return '+150 gold. Only one tyrant remains...'; },
+  q6(){ player.gold+=400; player.swordBonus+=10; return '+400 gold, the EMBER BLADE is yours! (+10 dmg)'; },
+};
 function elderDialog(){
-  const q1=state.quest1, q2=state.quest2;
-  if(q1.state==='none'){
+  const q=state.quest;
+  if(q.state==='none'){
     openDialog('Elder Maren',[
       'The fires of Emberfall grow cold, traveler...',
       'Slimes crawl from the marshes and haunt our fields.',
       'Slay 8 slimes and I will reward you from the village coffers.',
     ],[
-      {label:'Accept quest',act(){ q1.state='active'; q1.kills=0; sfx('quest');
+      {label:'Accept quest',act(){ q.state='active'; q.prog=0; sfx('quest');
         addText(player.x,player.y-30,'Quest: Slimy Situation (0/8)','#7ee787',2,true); state.dialog=null; }},
       {label:'Not now',act(){ state.dialog=null; }},
     ]);
-  } else if(q1.state==='active'){
-    openDialog('Elder Maren',[
-      'The slimes still crawl... ('+q1.kills+' / '+q1.need+' slain)',
-      'Come back when the fields are safe.',
-    ]);
-  } else if(q1.state==='ready'){
-    openDialog('Elder Maren',[
-      'You did it! The fields breathe again.',
-      'Take this gold — and these potions for the road ahead.',
-      'One more thing... a darkness festers to the south-east.',
-      'An ancient tyrant, the EMBER TYRANT, stirs in the corrupted wastes.',
-      'End it, and Emberfall is saved forever.',
-    ],[
-      {label:'Claim reward & accept',act(){
-        q1.state='done'; q2.state='active';
-        player.gold+=100; player.potions+=2; sfx('quest');
-        addText(player.x,player.y-30,'+100g, +2 potions. Quest: The Ember Tyrant','#7ee787',2.5,true);
-        state.dialog=null; }},
-    ]);
-  } else if(q2.state==='active'){
-    openDialog('Elder Maren',[
-      'The corrupted wastes lie to the SOUTH-EAST.',
-      'Strike the Tyrant down while its flames are low.',
-    ]);
-  } else if(q2.state==='ready'){
-    openDialog('Elder Maren',[
-      'You... you truly did it. The Ember Tyrant is no more!',
-      'Emberfall is saved. You are a legend, traveler.',
-    ],[
-      {label:'Claim 300 gold & Ember Blade',act(){
-        q2.state='done'; player.gold+=300; player.swordBonus+=10; sfx('quest');
-        addText(player.x,player.y-30,'+300g, EMBER BLADE acquired!','#ffd75e',2.5,true);
-        state.dialog=null; }},
-    ]);
-  } else {
-    openDialog('Elder Maren',['The hearth burns warm again, thanks to you.','Rest, hero of Emberfall.']);
+    return;
   }
+  if(q.state==='active'){
+    if(questDone(q.id)){ q.state='ready'; }
+    else {
+      const msgs={
+        q1:'The slimes still crawl... ('+q.prog+' / 8 slain)',
+        q2:'A stairway has opened at the heart of the corrupted wastes.',
+        q3:'The Bone King rules the first floor of the Depths.',
+        q4:'Two fires remain: the Cinder Golem (F2) and Malachar (F3).',
+        q5:'Pyrelord Vex storms the Ashen Deep (F4).',
+        q6:'The EMBER TYRANT sits on its throne (F5). End this.',
+      };
+      openDialog('Elder Maren',[msgs[q.id],'Come back when it is done.']);
+      return;
+    }
+  }
+  if(q.state==='ready'){
+    const reward=QUEST_CLAIM[q.id]();
+    sfx('quest');
+    const next=QUEST_ORDER[(QUEST_ORDER.indexOf(q.id)+1)];
+    if(q.id==='q6'){
+      q.state='done';
+      addText(player.x,player.y-34,'EMBERFALL IS SAVED!','#ffd75e',3.5,true);
+      openDialog('Elder Maren',[
+        'You... you truly did it. The Tyrant is no more!',
+        'The hearth-fires burn bright once again.',
+        'Emberfall is saved. You are a legend, traveler.',
+      ],[{label:'Claim final reward',act(){
+        addText(player.x,player.y-30,reward,'#ffd75e',3,true);
+        state.dialog=null;
+      }}]);
+      return;
+    }
+    q.id=next; q.state='active'; q.prog=0;
+    addText(player.x,player.y-30,'Quest: '+QUESTS[next].title,'#7ee787',2.5,true);
+    addText(player.x,player.y-56,reward,'#ffd75e',2.5,true);
+    openDialog('Elder Maren',[
+      reward,
+      'New task: '+QUESTS[next].goal,
+    ],[{label:'Onward',act(){ state.dialog=null; }}]);
+    return;
+  }
+  openDialog('Elder Maren',['The hearth burns warm again, thanks to you.','Rest, hero of Emberfall — or delve once more.']);
 }
 function merchantDialog(){
-  const swordPrice=120*Math.pow(2,player.swordLvl||0);
-  const armorPrice=150*Math.pow(2,player.armorLvl||0);
+  const swordPrice=120*Math.pow(2,player.swordLvl);
+  const armorPrice=150*Math.pow(2,player.armorLvl);
+  const lanternPrice=80*Math.pow(2,player.lightLvl);
   openDialog('Finn the Trader',[
-    'Psst! Finest wares in all of Emberfall!',
+    'Psst! Finest wares in all of Emberfall — and the Depths below!',
     'You have '+player.gold+' gold.',
   ],[
     {label:'Buy Health Potion — 25g',act(){
@@ -621,27 +903,126 @@ function merchantDialog(){
       else { sfx('denied'); addText(player.x,player.y-26,'Not enough gold!','#ff9a9a'); }
       merchantDialog(); }},
     {label:'Sharpen Blade +8 dmg — '+swordPrice+'g',act(){
-      if(player.gold>=swordPrice){ player.gold-=swordPrice; player.swordBonus+=8; player.swordLvl=(player.swordLvl||0)+1; sfx('buy');
+      if(player.gold>=swordPrice){ player.gold-=swordPrice; player.swordBonus+=8; player.swordLvl++; sfx('buy');
         addText(player.x,player.y-26,'Blade sharpened!','#ffd75e'); }
       else { sfx('denied'); addText(player.x,player.y-26,'Not enough gold!','#ff9a9a'); }
       merchantDialog(); }},
     {label:'Reinforce Armor — '+armorPrice+'g',act(){
-      if(player.gold>=armorPrice){ player.gold-=armorPrice; player.armor++; player.armorLvl=(player.armorLvl||0)+1; sfx('buy');
+      if(player.gold>=armorPrice){ player.gold-=armorPrice; player.armor++; player.armorLvl++; sfx('buy');
         addText(player.x,player.y-26,'Armor reinforced!','#9ad1ff'); }
+      else { sfx('denied'); addText(player.x,player.y-26,'Not enough gold!','#ff9a9a'); }
+      merchantDialog(); }},
+    {label:'Lantern Upgrade — '+lanternPrice+'g'+(player.lightLvl>=3?' (MAX)':''),act(){
+      if(player.lightLvl>=3){ sfx('denied'); addText(player.x,player.y-26,'Lantern already burning bright!','#c9d1d9'); }
+      else if(player.gold>=lanternPrice){ player.gold-=lanternPrice; player.lightLvl++; sfx('buy');
+        addText(player.x,player.y-26,'Lantern upgraded! You see further in the dark.','#ffe08a'); }
       else { sfx('denied'); addText(player.x,player.y-26,'Not enough gold!','#ff9a9a'); }
       merchantDialog(); }},
     {label:'Leave',act(){ state.dialog=null; }},
   ]);
 }
+
+/* ---------------- interactions & floor transitions ---------------- */
+function startTransition(cb){ state.trans={t:0,phase:'out',cb}; }
+function toSurface(reason){
+  state.floor=0; genSurface(); spawnNPCs(); buildMinimap();
+  enemies=[]; arrows=[]; drops=[];
+  player.x=VILLAGE.x*TS+TS/2; player.y=(VILLAGE.y+2.2)*TS;
+  player.x=findFreeSpot(player.x,player.y,player.r).x;
+  state.boss=null; state.portal=null;
+  addText(player.x,player.y-40,reason,'#c9d1d9',2.5,true);
+}
+function descend(){
+  if(state.floor>=MAXFLOOR) return;
+  sfx('stairs');
+  state.flags.descended=true; readyIf('q2');
+  startTransition(()=>{
+    state.floor++;
+    state.boss=null;
+    genDungeon(state.floor);
+    player.x=state.dstart.x; player.y=state.dstart.y;
+    populateFloor(); buildMinimap();
+    cam.x=player.x-VW/2; cam.y=player.y-VH/2;
+    sfx('quest');
+    addText(player.x,player.y-46,'Floor '+state.floor+' — '+FLNAMES[state.floor],'#ff8a5e',3,true);
+    if(state.bossesDead[state.floor])
+      addText(player.x,player.y-70,'Its guardian already lies slain.','#c9d1d9',2.5,true);
+  });
+  if(state.quest.id==='q2' && state.quest.state==='active'){ state.flags.descended=true; readyIf('q2'); }
+}
+function ascend(){
+  if(state.floor<=0) return;
+  sfx('stairs');
+  startTransition(()=>{
+    if(state.floor===1){ state.boss=null; toSurface('You climb back to Emberfall — Surface'); }
+    else {
+      state.floor--;
+      state.boss=null;
+      genDungeon(state.floor);
+      player.x=state.dstart.x; player.y=state.dstart.y;
+      populateFloor(); buildMinimap();
+      cam.x=player.x-VW/2; cam.y=player.y-VH/2;
+      addText(player.x,player.y-46,'Floor '+state.floor+' — '+FLNAMES[state.floor],'#ff8a5e',2.5,true);
+    }
+  });
+}
+function openChest(c){
+  c.opened=true; state.openedChests.add(c.id);
+  sfx('chest');
+  burst(c.x,c.y,'#ffd75e',20,150,0.8,3.5);
+  const n=4+((Math.random()*4)|0);
+  for(let i=0;i<n;i++) drops.push({type:'coin',x:c.x+rnd(-14,14),y:c.y+rnd(-14,14),val:Math.ceil(rnd(2,6)),t:rnd(TAU),vx:rnd(-60,60),vy:rnd(-60,60)});
+  if(Math.random()<0.4) drops.push({type:'potion',x:c.x,y:c.y-6,t:rnd(TAU),vx:0,vy:0});
+  if(Math.random()<0.35) for(let i=0;i<2;i++) drops.push({type:'gem',x:c.x+rnd(-10,10),y:c.y+rnd(-10,10),val:Math.ceil(rnd(20,50)),t:rnd(TAU),vx:rnd(-40,40),vy:rnd(-40,40)});
+}
+function activateShrine(s){
+  s.active=true;
+  s.left=3+2*s.fl;
+  sfx('shrine');
+  addText(s.x,s.y-40,'The shrine awakens! Slay the guardians ('+s.left+')','#ffd75e',2.6,true);
+  burst(s.x,s.y,'#ffd75e',24,160,0.9,3.5);
+  for(let i=0;i<s.left;i++){
+    const a=rnd(TAU), r=rnd(110,240);
+    const spot=findFreeSpot(s.x+Math.cos(a)*r,s.y+Math.sin(a)*r,12);
+    makeEnemy(pick(SPAWNS[s.fl]),spot.x,spot.y,{shrineRef:s,elite:false,minion:false});
+  }
+}
+function usePortal(){
+  sfx('stairs');
+  startTransition(()=>{ toSurface('The portal carries you home...'); });
+}
 function interact(){
   const n=nearNPC();
-  if(!n) return;
-  if(n.kind==='elder') elderDialog();
-  else if(n.kind==='merchant') merchantDialog();
-  else openDialog('Little Osk',['I saw a BIG red monster in the south-east wastes...','Papa says it ate the whole blacksmith!','Be careful, mister!']);
+  if(n){
+    if(n.kind==='elder') elderDialog();
+    else if(n.kind==='merchant') merchantDialog();
+    else openDialog('Little Osk',[
+      'I saw a BIG red monster in the south-east wastes...',
+      'Papa says the stairway it guards goes DOWN, like, five floors deep!',
+      'And there are glowing shrines down there — Papa says never press E on them.',
+      'Be careful, mister!',
+    ]);
+    return;
+  }
+  const ptx=Math.floor(player.x/TS), pty=Math.floor(player.y/TS);
+  let sd=null;
+  for(const [dx,dy] of [[0,0],[1,0],[-1,0],[0,1],[0,-1]]){
+    const t=tileAt(ptx+dx,pty+dy);
+    if(t===T_STAIRSDOWN) sd='down';
+    else if(t===T_STAIRSUP) sd='up';
+  }
+  if(sd==='down' && state.floor<MAXFLOOR){ descend(); return; }
+  if(sd==='up' && state.floor>0){ ascend(); return; }
+  for(const c of chests)
+    if(!c.opened && dist(c.x,c.y,player.x,player.y)<38){ openChest(c); return; }
+  for(const s of shrines)
+    if(!s.active && !s.done && dist(s.x,s.y,player.x,player.y)<46){ activateShrine(s); return; }
+  if(state.portal && dist(state.portal.x,state.portal.y,player.x,player.y)<52){ usePortal(); return; }
 }
 
 /* ---------------- input ---------------- */
+const keys={};
+let mouse={x:0,y:0,down:false};
 window.addEventListener('keydown',e=>{
   const k=e.key.toLowerCase();
   if(['arrowup','arrowdown','arrowleft','arrowright',' '].includes(k)) e.preventDefault();
@@ -675,14 +1056,14 @@ window.addEventListener('keydown',e=>{
   if(k===' '||k==='j') doAttack(Math.atan2(player.face.y,player.face.x));
 });
 window.addEventListener('keyup',e=>{ keys[e.key.toLowerCase()]=false; });
-window.addEventListener('blur',()=>{ for(const k in keys) keys[k]=false; mouse.down=false; }); // no stuck keys after alt-tab
+window.addEventListener('blur',()=>{ for(const k in keys) keys[k]=false; mouse.down=false; });
 cvs.addEventListener('mousemove',e=>{ const r=cvs.getBoundingClientRect(); mouse.x=e.clientX-r.left; mouse.y=e.clientY-r.top; });
 cvs.addEventListener('mousedown',e=>{
   ac();
   if(state.mode==='title'){ startGame(); return; }
   if(state.mode==='dead'){ respawn(); return; }
   if(state.mode==='victory'){ state.mode='play'; state.firstVictory=false; return; }
-  if(state.dialog||state.paused) return;
+  if(state.dialog||state.paused||state.trans) return;
   const wx=mouse.x+cam.x, wy=mouse.y+cam.y;
   doAttack(Math.atan2(wy-player.y,wx-player.x));
 });
@@ -695,30 +1076,246 @@ function startGame(){
   addText(player.x,player.y-40,'Welcome to Emberfall','#ffd75e',3,true);
 }
 function respawn(){
+  if(state.floor!==0){ genSurface(); spawnNPCs(); buildMinimap(); state.floor=0; }
   player.hp=player.maxHp;
   player.gold=Math.floor(player.gold*0.8);
   player.x=VILLAGE.x*TS+TS/2; player.y=(VILLAGE.y+2.2)*TS;
+  enemies=[]; arrows=[]; drops=[];
+  state.boss=null; state.portal=null; state.trans=null;
   state.mode='play'; player.invulnT=2;
-  addText(player.x,player.y-40,'You wake by the village well...','#c9d1d9',2.5,true);
+  addText(player.x,player.y-40,'You wake by the village well... (lost 20% gold)','#c9d1d9',2.5,true);
 }
 
 /* ---------------- camera ---------------- */
 const cam={x:0,y:0};
 function updateCam(dt){
-  const maxX=W*TS-VW, maxY=H*TS-VH;
-  const tx = maxX<=0 ? maxX/2 : clamp(player.x-VW/2,0,maxX); // center world if screen is bigger
+  const maxX=mapW*TS-VW, maxY=mapH*TS-VH;
+  const tx = maxX<=0 ? maxX/2 : clamp(player.x-VW/2,0,maxX);
   const ty = maxY<=0 ? maxY/2 : clamp(player.y-VH/2,0,maxY);
   cam.x=lerp(cam.x,tx,1-Math.pow(0.0001,dt));
   cam.y=lerp(cam.y,ty,1-Math.pow(0.0001,dt));
 }
 
-/* ---------------- rendering ---------------- */
+/* ---------------- update ---------------- */
+function update(dt){
+  state.time+=dt;
+  musicTick(dt);
+  if(state.shakeT>0) state.shakeT-=dt;
+
+  // particles / texts always animate
+  for(const p of parts){ p.life-=dt; p.x+=p.vx*dt; p.y+=p.vy*dt; p.vy+=p.grav*dt; p.vx*=0.98; }
+  parts=parts.filter(p=>p.life>0);
+  for(const t of texts){ t.life-=dt; t.y-=26*dt; }
+  texts=texts.filter(t=>t.life>0);
+
+  if(state.mode!=='play' || state.paused) return;
+  playTime+=dt;
+
+  // floor transition fade
+  if(state.trans){
+    const tr=state.trans;
+    if(tr.phase==='out'){ tr.t+=dt*2.4; if(tr.t>=1){ tr.t=1; tr.cb(); tr.phase='in'; } }
+    else { tr.t-=dt*2.4; if(tr.t<=0) state.trans=null; }
+    return;
+  }
+
+  /* --- player --- */
+  const p=player;
+  p.atkCd-=dt; p.swingT-=dt; p.invulnT-=dt; p.hurtFlash-=dt;
+  let mx=0,my=0;
+  const canMove = !state.dialog;
+  if(canMove){
+    if(keys['w']||keys['arrowup']) my-=1;
+    if(keys['s']||keys['arrowdown']) my+=1;
+    if(keys['a']||keys['arrowleft']) mx-=1;
+    if(keys['d']||keys['arrowright']) mx+=1;
+  }
+  p.moving = mx!==0||my!==0;
+  if(p.moving){
+    const l=Math.hypot(mx,my); mx/=l; my/=l;
+    moveEntity(p,mx*p.speed*dt,my*p.speed*dt);
+    p.face.x=mx; p.face.y=my;
+    p.walkT+=dt*10;
+  } else p.walkT=0;
+  // continuous attack while mouse held
+  if(mouse.down && canMove) doAttack(Math.atan2(mouse.y+cam.y-p.y, mouse.x+cam.x-p.x));
+  // lava burns
+  if(tileAtPx(p.x,p.y)===T_LAVA && p.invulnT<=0)
+    hurtPlayer(8,p.x+rnd(-1,1),p.y+rnd(-1,1));
+  // safety net: never stay trapped inside collision
+  if(!circleFree(p.x,p.y,p.r)){ const s=findFreeSpot(p.x,p.y,p.r); p.x=s.x; p.y=s.y; }
+
+  /* --- enemies --- */
+  const villagePx=VILLAGE.x*TS, villagePy=VILLAGE.y*TS;
+  for(const e of [...enemies]){
+    e.flash-=dt; e.atkCd-=dt; e.shootCd-=dt; e.castCd-=dt; e.summonCd-=dt; e.phase+=dt*6;
+    e.x+=e.kb.x*dt; e.y+=e.kb.y*dt;
+    const kdec=Math.pow(0.02,dt); e.kb.x*=kdec; e.kb.y*=kdec;
+    if(state.floor===0){
+      const vd=dist(e.x,e.y,villagePx,villagePy);
+      if(vd<VILLAGE.r*TS){
+        const a=Math.atan2(e.y-villagePy,e.x-villagePx);
+        moveEntity(e,Math.cos(a)*e.spd*1.4*dt,Math.sin(a)*e.spd*1.4*dt);
+        continue;
+      }
+    }
+    const d=dist(e.x,e.y,p.x,p.y);
+    const aggro=EDEF[e.type].aggro;
+    if(d<aggro && d>0){
+      let a=Math.atan2(p.y-e.y,p.x-e.x);
+      if(e.type==='bat'){
+        a+=Math.sin(e.phase*0.9)*0.8;
+        avoidLava(e,Math.cos(a)*e.spd*dt,Math.sin(a)*e.spd*dt);
+      } else if(e.type==='necro'){
+        if(d<150) avoidLava(e,-Math.cos(a)*e.spd*dt,-Math.sin(a)*e.spd*dt);
+        else if(d>280) avoidLava(e,Math.cos(a)*e.spd*dt,Math.sin(a)*e.spd*dt);
+        else { const s=Math.sin(e.phase*0.5);
+          avoidLava(e,Math.cos(a+Math.PI/2)*e.spd*0.5*s*dt,Math.sin(a+Math.PI/2)*e.spd*0.5*s*dt); }
+        if(e.castCd<=0 && d<420){
+          e.castCd=2.6; sfx('fire');
+          eBolt(e.x,e.y,a,250,e.dmg*0.75,'void',1.8);
+          burst(e.x,e.y,'#c46bff',5,60,0.3,2);
+        }
+        if(e.summonCd<=0){
+          e.summonCd=8;
+          if(enemies.filter(x=>x.necroMinion).length<2){
+            for(let i=0;i<2;i++){
+              const s=findFreeSpot(e.x+rnd(-40,40),e.y+rnd(-40,40),11);
+              makeEnemy('skeleton',s.x,s.y).necroMinion=true;
+            }
+            sfx('summon'); burst(e.x,e.y,'#c46bff',10,80,0.5,3);
+          }
+        }
+      } else {
+        avoidLava(e,Math.cos(a)*e.spd*dt,Math.sin(a)*e.spd*dt);
+      }
+      if(e.shoots && d<260 && d>70 && e.shootCd<=0){
+        e.shootCd=1.9; sfx('arrow');
+        eBolt(e.x,e.y,a,235,e.dmg*0.75,'bone',2.2);
+      }
+      if(d<e.r+p.r+3 && e.atkCd<=0){
+        e.atkCd=0.85; hurtPlayer(e.dmg,e.x,e.y);
+      }
+    } else {
+      e.wanderT-=dt;
+      if(e.wanderT<=0){ e.wanderT=rnd(1,2.6); e.wa=rnd(TAU); }
+      avoidLava(e,Math.cos(e.wa)*e.spd*0.35*dt,Math.sin(e.wa)*e.spd*0.35*dt);
+    }
+  }
+
+  /* --- boss --- */
+  if(state.boss) updateBoss(state.boss,dt);
+  else if(state.floor>0 && !state.bossesDead[state.floor] && state.dbossRoom){
+    const br=state.dbossRoom;
+    const ptx=p.x/TS, pty=p.y/TS;
+    if(ptx>br.x-1.5 && ptx<br.x+br.w+1.5 && pty>br.y-1.5 && pty<br.y+br.h+1.5)
+      spawnBoss(FLOORBOSS[state.floor], br.cx*TS+TS/2, br.cy*TS+TS/2);
+  }
+
+  /* --- arrows (enemy bolts) --- */
+  for(const a of [...arrows]){
+    a.life-=dt; a.x+=a.vx*dt; a.y+=a.vy*dt;
+    if(a.life<=0 || !circleFree(a.x,a.y,3,true)){ arrows.splice(arrows.indexOf(a),1); continue; }
+    if(dist(a.x,a.y,p.x,p.y)<p.r+4){
+      hurtPlayer(a.dmg,a.x-a.vx,a.y-a.vy);
+      arrows.splice(arrows.indexOf(a),1);
+    }
+  }
+
+  /* --- drops --- */
+  for(const d of [...drops]){
+    d.t+=dt*4;
+    d.x+=d.vx*dt; d.y+=d.vy*dt; d.vx*=0.9; d.vy*=0.9;
+    const dd=dist(d.x,d.y,p.x,p.y);
+    if(dd<70){ const a=Math.atan2(p.y-d.y,p.x-d.x); const pull=clamp((70-dd)*8,60,320); d.x+=Math.cos(a)*pull*dt; d.y+=Math.sin(a)*pull*dt; }
+    if(dd<p.r+10){
+      drops.splice(drops.indexOf(d),1);
+      if(d.type==='coin'){ player.gold+=d.val; addText(d.x,d.y-10,'+'+d.val+'g','#ffd75e',0.7); sfx('coin'); }
+      else if(d.type==='potion'){ player.potions++; addText(d.x,d.y-10,'+1 potion','#ff7b8f',0.9); sfx('potion'); }
+      else { gainXp(d.val); sfx('xp'); }
+    }
+  }
+
+  /* --- spawn timer --- */
+  state.spawnT-=dt;
+  if(state.spawnT<=0){
+    state.spawnT=1.4;
+    if(state.floor===0) spawnEnemySurface(); else spawnEnemyFloor();
+  }
+}
+
+/* ---------------- rendering: world ---------------- */
+const THEMES={
+  1:{bg:'#141210', wall:'#4a443c', wallTop:'#61584a', floor:'#34302b', floorHi:'#3f3a33', fog:'rgba(8,7,10,0.88)'},
+  2:{bg:'#180f0d', wall:'#3a2d31', wallTop:'#523f44', floor:'#2c2325', floorHi:'#382c2f', fog:'rgba(16,4,4,0.86)'},
+  3:{bg:'#120e18', wall:'#332a44', wallTop:'#493c63', floor:'#251f31', floorHi:'#302842', fog:'rgba(10,6,18,0.88)'},
+  4:{bg:'#171310', wall:'#3d342c', wallTop:'#54483b', floor:'#2a2521', floorHi:'#352f28', fog:'rgba(14,10,8,0.86)'},
+  5:{bg:'#140b09', wall:'#41292a', wallTop:'#583c3e', floor:'#2b1d1d', floorHi:'#372727', fog:'rgba(18,6,4,0.88)'},
+};
 function drawTiles(){
-  const x0=Math.max(0,Math.floor(cam.x/TS)), x1=Math.min(W-1,Math.floor((cam.x+VW)/TS));
-  const y0=Math.max(0,Math.floor(cam.y/TS)), y1=Math.min(H-1,Math.floor((cam.y+VH)/TS));
+  const x0=Math.max(0,Math.floor(cam.x/TS)), x1=Math.min(mapW-1,Math.floor((cam.x+VW)/TS));
+  const y0=Math.max(0,Math.floor(cam.y/TS)), y1=Math.min(mapH-1,Math.floor((cam.y+VH)/TS));
   const t=state.time;
+  if(state.floor>0){
+    const th=THEMES[state.floor];
+    for(let ty=y0;ty<=y1;ty++)for(let tx=x0;tx<=x1;tx++){
+      const tl=tiles[ty*mapW+tx], v=tileVar[ty*mapW+tx];
+      const px=tx*TS-cam.x, py=ty*TS-cam.y;
+      if(tl===T_WALL){
+        ctx.fillStyle=th.wall; ctx.fillRect(px,py,TS,TS);
+        ctx.strokeStyle='rgba(0,0,0,0.3)'; ctx.lineWidth=1;
+        ctx.beginPath();
+        ctx.moveTo(px,py+11); ctx.lineTo(px+TS,py+11);
+        ctx.moveTo(px,py+22); ctx.lineTo(px+TS,py+22);
+        const j1=(hash2(tx,ty)*TS)|0, j2=(hash2(ty,tx)*TS)|0;
+        ctx.moveTo(px+((j1%2)*16+8)%TS,py+11); ctx.lineTo(px+((j1%2)*16+8)%TS,py+22);
+        ctx.moveTo(px+(j2%TS),py); ctx.lineTo(px+(j2%TS),py+11);
+        ctx.stroke();
+        if(tileAt(tx,ty-1)!==T_WALL){ ctx.fillStyle=th.wallTop; ctx.fillRect(px,py,TS,5); }
+        continue;
+      }
+      if(tl===T_LAVA){
+        const sh=Math.sin(t*2.2+tx*0.8+ty*1.1)*0.5+0.5;
+        ctx.fillStyle=`rgb(${190+sh*50|0},${58+sh*46|0},18)`;
+        ctx.fillRect(px,py,TS,TS);
+        if(v>0.55){
+          const gl=0.5+0.5*Math.sin(t*4+tx*2+ty*3);
+          ctx.fillStyle=`rgba(255,225,120,${0.25+gl*0.4})`;
+          ctx.fillRect(px+6+v*14,py+8+((v*37)%12),5,3);
+          ctx.fillRect(px+18,py+20-gl*4,4,3);
+        }
+        continue;
+      }
+      if(tl===T_STAIRSDOWN){
+        ctx.fillStyle='#0c0a0e'; ctx.fillRect(px,py,TS,TS);
+        ctx.fillStyle='#241f1a';
+        for(let i=0;i<4;i++) ctx.fillRect(px+4+i*6,py+4+i*6,TS-8-i*12,TS-8-i*12);
+        const gl=0.5+0.5*Math.sin(t*3);
+        ctx.strokeStyle=`rgba(255,120,60,${0.25+gl*0.35})`; ctx.lineWidth=2;
+        ctx.strokeRect(px+3,py+3,TS-6,TS-6);
+        continue;
+      }
+      if(tl===T_STAIRSUP){
+        ctx.fillStyle='#241f1a'; ctx.fillRect(px,py,TS,TS);
+        ctx.fillStyle='#4a4038';
+        for(let i=0;i<4;i++) ctx.fillRect(px+12-i*3,py+12-i*3,8+i*6,8+i*6);
+        const gl=0.5+0.5*Math.sin(t*2.4);
+        ctx.strokeStyle=`rgba(255,215,120,${0.2+gl*0.3})`; ctx.lineWidth=2;
+        ctx.strokeRect(px+2,py+2,TS-4,TS-4);
+        continue;
+      }
+      // floor
+      ctx.fillStyle = v>0.5? th.floorHi : th.floor;
+      ctx.fillRect(px,py,TS,TS);
+      if(v>0.78){ ctx.fillStyle='rgba(0,0,0,0.25)'; ctx.fillRect(px+v*20,py+10,3,2); ctx.fillRect(px+20,py+v*16,2,2); }
+      if(v<0.14){ ctx.strokeStyle='rgba(0,0,0,0.28)'; ctx.lineWidth=1;
+        ctx.beginPath(); ctx.moveTo(px+6,py+8); ctx.lineTo(px+14,py+16); ctx.lineTo(px+12,py+24); ctx.stroke(); }
+    }
+    return;
+  }
+  /* surface */
   for(let ty=y0;ty<=y1;ty++)for(let tx=x0;tx<=x1;tx++){
-    const tl=tiles[ty*W+tx], v=variation[ty*W+tx];
+    const tl=tiles[ty*mapW+tx], v=tileVar[ty*mapW+tx];
     const px=tx*TS-cam.x, py=ty*TS-cam.y;
     if(tl===T_WATER){
       const sh=Math.sin(t*1.5+tx*0.9+ty*1.3)*0.5+0.5;
@@ -743,18 +1340,26 @@ function drawTiles(){
       const g=40+v*16|0, b=64+v*20|0, r=64+v*18|0;
       ctx.fillStyle=`rgb(${r},${g},${b})`;
       ctx.fillRect(px,py,TS,TS);
-      if(v>0.86){ // ember cracks
+      if(v>0.86){
         const gl=0.5+0.5*Math.sin(t*3+tx+ty);
         ctx.fillStyle=`rgba(255,${100+gl*80|0},40,${0.35+gl*0.4})`;
         ctx.fillRect(px+10,py+12,3,3); ctx.fillRect(px+18,py+20,2,2);
       }
       continue;
     }
-    // grass
+    if(tl===T_STAIRSDOWN){
+      ctx.fillStyle='#0c0a0e'; ctx.fillRect(px,py,TS,TS);
+      ctx.fillStyle='#241f1a';
+      for(let i=0;i<4;i++) ctx.fillRect(px+4+i*6,py+4+i*6,TS-8-i*12,TS-8-i*12);
+      const gl=0.5+0.5*Math.sin(t*3);
+      ctx.strokeStyle=`rgba(180,80,255,${0.25+gl*0.35})`; ctx.lineWidth=2;
+      ctx.strokeRect(px+3,py+3,TS-6,TS-6);
+      continue;
+    }
     const g=140+v*22|0;
     ctx.fillStyle=`rgb(${52+v*14|0},${g},${58+v*12|0})`;
     ctx.fillRect(px,py,TS,TS);
-    if(v>0.55){ // tufts
+    if(v>0.55){
       ctx.strokeStyle='rgba(30,80,30,0.5)'; ctx.lineWidth=1.4;
       ctx.beginPath();
       const bx=px+4+v*20, by=py+8+v*16;
@@ -763,6 +1368,20 @@ function drawTiles(){
       ctx.stroke();
     }
   }
+}
+function roundRect(x,y,w,h,r){
+  ctx.beginPath();
+  ctx.moveTo(x+r,y);
+  ctx.arcTo(x+w,y,x+w,y+h,r);
+  ctx.arcTo(x+w,y+h,x,y+h,r);
+  ctx.arcTo(x,y+h,x,y,r);
+  ctx.arcTo(x,y,x+w,y,r);
+  ctx.closePath();
+}
+
+function shadowEllipse(x,y,rx,ry){
+  ctx.fillStyle='rgba(0,0,0,0.28)';
+  ctx.beginPath(); ctx.ellipse(x,y,rx,ry,0,0,TAU); ctx.fill();
 }
 function drawFlowers(){
   const t=state.time;
@@ -776,18 +1395,15 @@ function drawFlowers(){
     ctx.beginPath(); ctx.arc(sx+sway,sy-4,2.6,0,TAU); ctx.fill();
   }
 }
-function drawRocks(){
-  for(const r of rocks){
-    const sx=r.x-cam.x, sy=r.y-cam.y;
-    if(sx<-30||sy<-30||sx>VW+30||sy>VH+30) continue;
-    ctx.fillStyle='rgba(0,0,0,0.25)';
-    ctx.beginPath(); ctx.ellipse(sx,sy+r.r*0.6,r.r*1.1,r.r*0.5,0,0,TAU); ctx.fill();
-    ctx.fillStyle=r.corrupt?'#4c3a55':'#8d8d95';
-    ctx.beginPath();
-    ctx.moveTo(sx-r.r,sy+r.r*0.4); ctx.lineTo(sx-r.r*0.5,sy-r.r*0.7); ctx.lineTo(sx+r.r*0.4,sy-r.r*0.9); ctx.lineTo(sx+r.r,sy+r.r*0.3); ctx.closePath(); ctx.fill();
-    ctx.fillStyle='rgba(255,255,255,0.18)';
-    ctx.beginPath(); ctx.moveTo(sx-r.r*0.5,sy-r.r*0.7); ctx.lineTo(sx+r.r*0.4,sy-r.r*0.9); ctx.lineTo(sx+r.r*0.1,sy-r.r*0.2); ctx.closePath(); ctx.fill();
-  }
+function drawRockOne(rk){
+  const sx=rk.x-cam.x, sy=rk.y-cam.y;
+  ctx.fillStyle='rgba(0,0,0,0.25)';
+  ctx.beginPath(); ctx.ellipse(sx,sy+rk.r*0.6,rk.r*1.1,rk.r*0.5,0,0,TAU); ctx.fill();
+  ctx.fillStyle=rk.corrupt?'#4c3a55':'#8d8d95';
+  ctx.beginPath();
+  ctx.moveTo(sx-rk.r,sy+rk.r*0.4); ctx.lineTo(sx-rk.r*0.5,sy-rk.r*0.7); ctx.lineTo(sx+rk.r*0.4,sy-rk.r*0.9); ctx.lineTo(sx+rk.r,sy+rk.r*0.3); ctx.closePath(); ctx.fill();
+  ctx.fillStyle='rgba(255,255,255,0.18)';
+  ctx.beginPath(); ctx.moveTo(sx-rk.r*0.5,sy-rk.r*0.7); ctx.lineTo(sx+rk.r*0.4,sy-rk.r*0.9); ctx.lineTo(sx+rk.r*0.1,sy-rk.r*0.2); ctx.closePath(); ctx.fill();
 }
 function drawTreeOne(tr){
   const t=state.time;
@@ -799,7 +1415,7 @@ function drawTreeOne(tr){
   ctx.fillStyle=tr.corrupt?'#3a2c33':'#6b4a2c';
   ctx.fillRect(sx-4*s,sy-16*s,8*s,24*s);
   ctx.fillStyle=tr.corrupt?'#2c2028':'#4a3220';
-  ctx.fillRect(sx-4*s,sy+5*s,8*s,3*s); // root flare
+  ctx.fillRect(sx-4*s,sy+5*s,8*s,3*s);
   ctx.fillStyle='rgba(255,255,255,0.12)';
   ctx.fillRect(sx-4*s,sy-16*s,2*s,22*s);
   const c1=tr.corrupt?'#3d2b4d':'#2f7a34', c2=tr.corrupt?'#55376b':'#3d9448';
@@ -814,12 +1430,6 @@ function drawTreeOne(tr){
     ctx.beginPath(); ctx.arc(sx+sway+3,sy-14*s,2.2,0,TAU); ctx.fill();
   }
 }
-function drawTrees(){
-  for(const tr of trees){
-    const sx=tr.x-cam.x, sy=tr.y-cam.y;
-    if(sx>-60&&sy>-90&&sx<VW+60&&sy<VH+60) drawTreeOne(tr);
-  }
-}
 function drawBuildings(){
   for(const b of buildings){
     const sx=b.x-cam.x, sy=b.y-cam.y;
@@ -832,27 +1442,21 @@ function drawBuildings(){
     }
     if(b.stall){
       ctx.fillStyle='#7a5a3a'; ctx.fillRect(sx,sy,b.w,b.h);
-      // awning stripes
       for(let i=0;i<6;i++){ ctx.fillStyle=i%2?'#e8e0d0':'#c8452f';
         ctx.fillRect(sx-6+i*(b.w+12)/6, sy-16, (b.w+12)/6, 12); }
       ctx.fillStyle='#5a4028'; ctx.fillRect(sx-4,sy-18,3,20); ctx.fillRect(sx+b.w+1,sy-18,3,20);
       continue;
     }
-    // shadow
     ctx.fillStyle='rgba(0,0,0,0.25)';
     ctx.fillRect(sx+4,sy+b.h-2,b.w,8);
-    // walls
     ctx.fillStyle=b.wall; ctx.fillRect(sx,sy,b.w,b.h);
     ctx.strokeStyle='rgba(90,70,45,0.5)'; ctx.lineWidth=2; ctx.strokeRect(sx+1,sy+1,b.w-2,b.h-2);
-    // door
     if(b.door){ ctx.fillStyle='#5a3a22'; ctx.fillRect(sx+b.w/2-10,sy+b.h-30,20,30);
       ctx.fillStyle='#c8a44a'; ctx.beginPath(); ctx.arc(sx+b.w/2+5,sy+b.h-15,2,0,TAU); ctx.fill(); }
-    // windows
     ctx.fillStyle='#8fd0e8';
     ctx.fillRect(sx+12,sy+14,14,14); ctx.fillRect(sx+b.w-26,sy+14,14,14);
     ctx.strokeStyle='#5a3a22'; ctx.lineWidth=2;
     ctx.strokeRect(sx+12,sy+14,14,14); ctx.strokeRect(sx+b.w-26,sy+14,14,14);
-    // roof
     ctx.fillStyle=b.roof;
     ctx.beginPath();
     ctx.moveTo(sx-10,sy); ctx.lineTo(sx+b.w/2,sy-b.h*0.55); ctx.lineTo(sx+b.w+10,sy); ctx.closePath(); ctx.fill();
@@ -860,10 +1464,73 @@ function drawBuildings(){
     ctx.beginPath(); ctx.moveTo(sx-10,sy); ctx.lineTo(sx+b.w/2,sy-b.h*0.55); ctx.lineTo(sx+b.w/2,sy); ctx.closePath(); ctx.fill();
   }
 }
-function shadowEllipse(x,y,rx,ry){
-  ctx.fillStyle='rgba(0,0,0,0.28)';
-  ctx.beginPath(); ctx.ellipse(x,y,rx,ry,0,0,TAU); ctx.fill();
+function drawTorchOne(tr){
+  const sx=tr.x-cam.x, sy=tr.y-cam.y;
+  const flick=0.75+0.25*Math.sin(state.time*9+tr.fl*7);
+  ctx.fillStyle='#3a2c20';
+  ctx.fillRect(sx-2,sy-2,4,7);
+  ctx.fillStyle=`rgba(255,140,50,${0.85*flick})`;
+  ctx.beginPath(); ctx.arc(sx,sy-4,3.2+1.4*flick,0,TAU); ctx.fill();
+  ctx.fillStyle=`rgba(255,225,140,${0.9*flick})`;
+  ctx.beginPath(); ctx.arc(sx,sy-5,1.6+0.9*flick,0,TAU); ctx.fill();
 }
+function drawChestOne(c){
+  const sx=c.x-cam.x, sy=c.y-cam.y;
+  shadowEllipse(sx,sy+7,11,4.5);
+  if(c.opened){
+    ctx.fillStyle='#6b4a2c'; ctx.fillRect(sx-10,sy-4,20,10);
+    ctx.fillStyle='#241c12'; ctx.fillRect(sx-8,sy-3,16,6);
+    ctx.fillStyle='#5a3d22'; ctx.fillRect(sx-10,sy-13,20,6);
+    ctx.fillStyle='#c8a44a'; ctx.fillRect(sx-2,sy-12,4,3);
+  } else {
+    ctx.fillStyle='#6b4a2c'; ctx.fillRect(sx-10,sy-8,20,15);
+    ctx.fillStyle='#835c36'; ctx.fillRect(sx-10,sy-8,20,5);
+    ctx.fillStyle='#c8a44a'; ctx.fillRect(sx-2,sy-4,4,6);
+    ctx.fillStyle='rgba(255,255,255,0.15)'; ctx.fillRect(sx-10,sy-8,20,2);
+  }
+}
+function drawShrineOne(s){
+  const sx=s.x-cam.x, sy=s.y-cam.y;
+  const t=state.time;
+  shadowEllipse(sx,sy+10,13,5);
+  ctx.fillStyle='#6a6a72';
+  ctx.beginPath(); ctx.ellipse(sx,sy+6,12,5,0,0,TAU); ctx.fill();
+  ctx.fillStyle='#8a8a92'; ctx.fillRect(sx-6,sy-6,12,12);
+  ctx.fillStyle='#5a5a62'; ctx.fillRect(sx-8,sy+2,16,5);
+  const bob=Math.sin(t*2.4)*3;
+  if(s.done){
+    ctx.fillStyle='rgba(150,160,170,0.5)';
+    ctx.beginPath(); ctx.arc(sx,sy-12+bob,4,0,TAU); ctx.fill();
+  } else if(s.active){
+    const gl=0.5+0.5*Math.sin(t*6);
+    const gr=ctx.createRadialGradient(sx,sy-12+bob,2,sx,sy-12+bob,26);
+    gr.addColorStop(0,`rgba(255,200,90,${0.5+gl*0.4})`); gr.addColorStop(1,'rgba(255,140,50,0)');
+    ctx.fillStyle=gr; ctx.beginPath(); ctx.arc(sx,sy-12+bob,26,0,TAU); ctx.fill();
+    ctx.fillStyle='#ffe08a';
+    ctx.beginPath(); ctx.arc(sx,sy-12+bob,5,0,TAU); ctx.fill();
+    ctx.strokeStyle=`rgba(255,215,94,${0.5+gl*0.4})`; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.arc(sx,sy-6,(26+gl*10)%(40)+14,0,TAU); ctx.stroke();
+  } else {
+    const gl=0.5+0.5*Math.sin(t*2.2);
+    ctx.fillStyle=`rgba(120,200,255,${0.55+gl*0.35})`;
+    ctx.beginPath(); ctx.arc(sx,sy-12+bob,4.5,0,TAU); ctx.fill();
+    ctx.strokeStyle=`rgba(120,200,255,${0.25+gl*0.3})`; ctx.lineWidth=1.5;
+    ctx.beginPath(); ctx.arc(sx,sy-12+bob,8+gl*2,0,TAU); ctx.stroke();
+  }
+}
+function drawPortalOne(po){
+  const sx=po.x-cam.x, sy=po.y-cam.y;
+  const t=state.time;
+  const gr=ctx.createRadialGradient(sx,sy,2,sx,sy,34);
+  gr.addColorStop(0,'rgba(190,110,255,0.55)'); gr.addColorStop(1,'rgba(190,110,255,0)');
+  ctx.fillStyle=gr; ctx.beginPath(); ctx.arc(sx,sy,34,0,TAU); ctx.fill();
+  for(let i=0;i<3;i++){
+    ctx.strokeStyle=['#c46bff','#ffd75e','#8a5cff'][i];
+    ctx.lineWidth=2.5;
+    ctx.beginPath(); ctx.arc(sx,sy,8+i*6,t*2+i*2,t*2+i*2+4); ctx.stroke();
+  }
+}
+
 function drawPlayer(){
   const p=player;
   const sx=p.x-cam.x, sy=p.y-cam.y;
@@ -871,25 +1538,19 @@ function drawPlayer(){
   const blink = p.invulnT>0 && (Math.floor(state.time*14)%2===0);
   if(blink && state.mode==='play') return;
   shadowEllipse(sx,sy+9,10,4.5);
-  // body / tunic
   ctx.fillStyle='#3a6fd8';
   roundRect(sx-8,sy-8+bob,16,18,5); ctx.fill();
   ctx.fillStyle='#2a55ab';
   roundRect(sx-8,sy+2+bob,16,8,4); ctx.fill();
-  // belt
   ctx.fillStyle='#5a3a22'; ctx.fillRect(sx-8,sy+1+bob,16,3);
   ctx.fillStyle='#ffd75e'; ctx.fillRect(sx-2,sy+1+bob,4,3);
-  // head
   ctx.fillStyle='#f0c49a';
   ctx.beginPath(); ctx.arc(sx,sy-13+bob,7,0,TAU); ctx.fill();
-  // hair
   ctx.fillStyle='#7a4a1e';
   ctx.beginPath(); ctx.arc(sx,sy-15+bob,7,Math.PI,TAU); ctx.fill();
-  // eyes
   ctx.fillStyle='#222';
   const ex=p.face.x*2, ey=p.face.y*1.4;
   ctx.beginPath(); ctx.arc(sx-2.5+ex,sy-12+bob+ey,1.3,0,TAU); ctx.arc(sx+2.5+ex,sy-12+bob+ey,1.3,0,TAU); ctx.fill();
-  // sword (idle on back, swing arc when attacking)
   if(p.swingT>0){
     const prog=1-p.swingT/0.18;
     const a0=p.swingDir-1.5, a1=p.swingDir+1.0;
@@ -900,7 +1561,6 @@ function drawPlayer(){
     ctx.beginPath(); ctx.moveTo(sx+Math.cos(a)*22,sy+Math.sin(a)*22);
     ctx.lineTo(sx+Math.cos(a)*44,sy+Math.sin(a)*44); ctx.stroke();
   } else {
-    // sheathed sword
     ctx.strokeStyle='#b8b8c8'; ctx.lineWidth=3; ctx.lineCap='round';
     ctx.beginPath(); ctx.moveTo(sx+6,sy-10+bob); ctx.lineTo(sx+11,sy+2+bob); ctx.stroke();
   }
@@ -913,21 +1573,20 @@ function drawNPC(n){
   roundRect(sx-8,sy-8+bob,16,18,5); ctx.fill();
   ctx.fillStyle=n.c;
   ctx.beginPath(); ctx.arc(sx,sy-13+bob,7,0,TAU); ctx.fill();
-  if(n.kind==='elder'){ // white beard + hat
+  if(n.kind==='elder'){
     ctx.fillStyle='#e8e8e8';
     ctx.beginPath(); ctx.ellipse(sx,sy-7+bob,4,6,0,0,TAU); ctx.fill();
     ctx.fillStyle='#4a3a8f';
     ctx.beginPath(); ctx.ellipse(sx,sy-19+bob,9,3.5,0,0,TAU); ctx.fill();
     ctx.fillRect(sx-5,sy-26+bob,10,7);
   }
-  if(n.kind==='merchant'){ // hat
+  if(n.kind==='merchant'){
     ctx.fillStyle='#8a5a1e';
     ctx.beginPath(); ctx.ellipse(sx,sy-18+bob,9,3,0,0,TAU); ctx.fill();
     ctx.fillRect(sx-4,sy-25+bob,8,7);
   }
   ctx.fillStyle='#222';
   ctx.beginPath(); ctx.arc(sx-2.5,sy-12+bob,1.2,0,TAU); ctx.arc(sx+2.5,sy-12+bob,1.2,0,TAU); ctx.fill();
-  // interact prompt
   if(dist(n.x,n.y,player.x,player.y)<44 && !state.dialog){
     ctx.font='bold 11px system-ui'; ctx.textAlign='center';
     const t='E — Talk';
@@ -940,25 +1599,46 @@ function drawEnemy(e){
   const sx=e.x-cam.x, sy=e.y-cam.y;
   shadowEllipse(sx,sy+e.r*0.8,e.r,e.r*0.42);
   const flash=e.flash>0;
-  if(e.type==='slime'){
+  if(e.elite){
+    const gl=0.5+0.5*Math.sin(state.time*4+e.phase);
+    ctx.strokeStyle=`rgba(200,110,255,${0.5+gl*0.4})`; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.arc(sx,sy,e.r+5+gl*2,0,TAU); ctx.stroke();
+    ctx.fillStyle=`rgba(220,150,255,${0.6+gl*0.3})`;
+    ctx.beginPath(); ctx.arc(sx+Math.cos(state.time*3)*e.r,sy-6,1.8,0,TAU); ctx.fill();
+  }
+  if(e.type==='slime'||e.type==='dslime'){
     const sq=1+Math.sin(e.phase)*0.12;
-    ctx.fillStyle=flash?'#fff':'#4ec954';
+    ctx.fillStyle=flash?'#fff':(e.type==='dslime'?'#8e4fd0':'#4ec954');
     ctx.beginPath(); ctx.ellipse(sx,sy,e.r*sq,e.r/sq,0,0,TAU); ctx.fill();
     ctx.fillStyle='rgba(255,255,255,0.35)';
     ctx.beginPath(); ctx.ellipse(sx-3,sy-4,3.5,2.5,-0.5,0,TAU); ctx.fill();
     ctx.fillStyle='#1a1a1a';
     ctx.beginPath(); ctx.arc(sx-3,sy,1.6,0,TAU); ctx.arc(sx+3.5,sy,1.6,0,TAU); ctx.fill();
+  } else if(e.type==='bat'){
+    const flap=Math.sin(e.phase*2.2)*0.7;
+    ctx.fillStyle=flash?'#fff':'#6d5680';
+    for(const s of [-1,1]){
+      ctx.beginPath();
+      ctx.moveTo(sx,sy);
+      ctx.lineTo(sx+s*12,sy-3-flap*7);
+      ctx.lineTo(sx+s*14,sy+3+flap*5);
+      ctx.closePath(); ctx.fill();
+    }
+    ctx.fillStyle=flash?'#fff':'#4a3a58';
+    ctx.beginPath(); ctx.ellipse(sx,sy,e.r*0.8,e.r,0,0,TAU); ctx.fill();
+    ctx.fillStyle='#ffcf6b';
+    ctx.beginPath(); ctx.arc(sx-2,sy-1,1.2,0,TAU); ctx.arc(sx+2,sy-1,1.2,0,TAU); ctx.fill();
   } else if(e.type==='skeleton'){
     ctx.strokeStyle=flash?'#fff':'#e8e8e0'; ctx.fillStyle=flash?'#fff':'#e8e8e0'; ctx.lineWidth=3; ctx.lineCap='round';
     ctx.beginPath(); ctx.arc(sx,sy-9,6,0,TAU); ctx.fill();
-    ctx.beginPath(); ctx.moveTo(sx,sy-3); ctx.lineTo(sx,sy+7); // spine
+    ctx.beginPath(); ctx.moveTo(sx,sy-3); ctx.lineTo(sx,sy+7);
     ctx.moveTo(sx-5,sy+1); ctx.lineTo(sx+5,sy+1);
     ctx.moveTo(sx-4,sy+4); ctx.lineTo(sx+4,sy+4);
     ctx.moveTo(sx,sy+7); ctx.lineTo(sx-3,sy+11); ctx.moveTo(sx,sy+7); ctx.lineTo(sx+3,sy+11);
     ctx.stroke();
     ctx.fillStyle='#ff4b4b';
     ctx.beginPath(); ctx.arc(sx-2.3,sy-9,1.4,0,TAU); ctx.arc(sx+2.3,sy-9,1.4,0,TAU); ctx.fill();
-  } else { // wraith
+  } else if(e.type==='wraith'){
     const a=0.65+Math.sin(e.phase*0.7)*0.2;
     ctx.globalAlpha=a;
     ctx.fillStyle=flash?'#fff':'#9b59d0';
@@ -972,58 +1652,184 @@ function drawEnemy(e){
     ctx.globalAlpha=1;
     ctx.fillStyle='#ffe08a';
     ctx.beginPath(); ctx.arc(sx-3,sy-8,1.8,0,TAU); ctx.arc(sx+3,sy-8,1.8,0,TAU); ctx.fill();
+  } else if(e.type==='golem'){
+    const gl=0.5+0.5*Math.sin(e.phase*0.8);
+    ctx.fillStyle=flash?'#fff':'#6b6570';
+    roundRect(sx-11,sy-12,22,22,6); ctx.fill();
+    ctx.fillStyle='#57525c';
+    roundRect(sx-11,sy-12,22,8,5); ctx.fill();
+    roundRect(sx-13,sy-2,7,11,3); ctx.fill();
+    roundRect(sx+6,sy-2,7,11,3); ctx.fill();
+    ctx.strokeStyle=`rgba(255,150,70,${0.5+gl*0.4})`; ctx.lineWidth=2;
+    ctx.beginPath();
+    ctx.moveTo(sx-4,sy-6); ctx.lineTo(sx+2,sy); ctx.lineTo(sx-2,sy+7);
+    ctx.stroke();
+    ctx.fillStyle=`rgba(255,190,90,${0.7+gl*0.3})`;
+    ctx.beginPath(); ctx.arc(sx-3,sy-6,1.6,0,TAU); ctx.arc(sx+4,sy-5,1.6,0,TAU); ctx.fill();
+  } else { // necro
+    const a=0.8+Math.sin(e.phase*0.6)*0.15;
+    ctx.globalAlpha=a;
+    ctx.fillStyle=flash?'#fff':'#4a3568';
+    ctx.beginPath();
+    ctx.moveTo(sx,sy-16);
+    ctx.quadraticCurveTo(sx+10,sy-4,sx+8,sy+9);
+    ctx.lineTo(sx-8,sy+9);
+    ctx.quadraticCurveTo(sx-10,sy-4,sx,sy-16);
+    ctx.fill();
+    ctx.globalAlpha=1;
+    ctx.fillStyle='#2c2040';
+    ctx.beginPath(); ctx.arc(sx,sy-10,5.5,0,TAU); ctx.fill();
+    ctx.fillStyle='#c46bff';
+    ctx.beginPath(); ctx.arc(sx-2,sy-10,1.4,0,TAU); ctx.arc(sx+2,sy-10,1.4,0,TAU); ctx.fill();
+    ctx.strokeStyle='#5a4030'; ctx.lineWidth=2.5;
+    ctx.beginPath(); ctx.moveTo(sx+9,sy-18); ctx.lineTo(sx+11,sy+8); ctx.stroke();
+    const gl=0.5+0.5*Math.sin(state.time*5+e.phase);
+    ctx.fillStyle=`rgba(190,110,255,${0.6+gl*0.4})`;
+    ctx.beginPath(); ctx.arc(sx+9,sy-20,2.6+gl,0,TAU); ctx.fill();
   }
-  // hp bar
   if(e.hp<e.maxHp){
     const w=26;
-    ctx.fillStyle='rgba(0,0,0,0.6)'; ctx.fillRect(sx-w/2,sy-e.r-12,w,4);
-    ctx.fillStyle='#ff5b5b'; ctx.fillRect(sx-w/2,sy-e.r-12,w*clamp(e.hp/e.maxHp,0,1),4);
+    ctx.fillStyle='rgba(0,0,0,0.6)'; ctx.fillRect(sx-w/2,sy-e.r-14,w,4);
+    ctx.fillStyle=e.elite?'#c46bff':'#ff5b5b';
+    ctx.fillRect(sx-w/2,sy-e.r-14,w*clamp(e.hp/e.maxHp,0,1),4);
   }
 }
+
 function drawBoss(){
-  const b=state.boss;
+  const b=state.boss; if(!b) return;
   const sx=b.x-cam.x, sy=b.y-cam.y;
-  // telegraph
+  const t=state.time;
   if(b.telegraph>0){
     ctx.fillStyle='rgba(255,60,30,0.18)';
     ctx.beginPath(); ctx.arc(sx,sy,b.telegraphR,0,TAU); ctx.fill();
     ctx.strokeStyle='rgba(255,80,40,0.7)'; ctx.lineWidth=3;
-    ctx.beginPath(); ctx.arc(sx,sy,b.telegraphR*(1-b.telegraph/0.9),0,TAU); ctx.stroke();
+    ctx.beginPath(); ctx.arc(sx,sy,b.telegraphR*(1-b.telegraph/0.95),0,TAU); ctx.stroke();
+  }
+  if(b.kind==='pyrelord'&&b.telegraph>0){
+    ctx.strokeStyle='rgba(255,80,40,0.5)'; ctx.lineWidth=10;
+    ctx.beginPath();
+    ctx.moveTo(sx,sy);
+    ctx.lineTo(sx+Math.cos(b.teleA)*280,sy+Math.sin(b.teleA)*280);
+    ctx.stroke();
   }
   shadowEllipse(sx,sy+b.r*0.85,b.r*1.15,b.r*0.45);
-  const sq=1+Math.sin(b.phase)*0.08;
   const flash=b.flash>0;
-  // glow
-  const gl=ctx.createRadialGradient(sx,sy,5,sx,sy,b.r*2.2);
-  gl.addColorStop(0,'rgba(255,110,40,0.35)'); gl.addColorStop(1,'rgba(255,110,40,0)');
-  ctx.fillStyle=gl; ctx.beginPath(); ctx.arc(sx,sy,b.r*2.2,0,TAU); ctx.fill();
-  ctx.fillStyle=flash?'#fff':(b.enraged?'#d33a1e':'#b3341c');
-  ctx.beginPath(); ctx.ellipse(sx,sy,b.r*sq,b.r/sq,0,0,TAU); ctx.fill();
-  ctx.fillStyle=flash?'#fff':'#7a2412';
-  ctx.beginPath(); ctx.ellipse(sx,sy+b.r*0.5,b.r*0.9*sq,b.r*0.45/sq,0,0,Math.PI); ctx.fill();
-  ctx.fillStyle='rgba(255,255,255,0.25)';
-  ctx.beginPath(); ctx.ellipse(sx-b.r*0.35,sy-b.r*0.4,b.r*0.25,b.r*0.16,-0.6,0,TAU); ctx.fill();
-  // eyes
-  ctx.fillStyle='#ffe08a';
-  const ex=(player.x-b.x>0?3:-3);
-  ctx.beginPath(); ctx.arc(sx-7+ex,sy-6,3.4,0,TAU); ctx.arc(sx+7+ex,sy-6,3.4,0,TAU); ctx.fill();
-  ctx.fillStyle='#1a0505';
-  ctx.beginPath(); ctx.arc(sx-7+ex,sy-6,1.5,0,TAU); ctx.arc(sx+7+ex,sy-6,1.5,0,TAU); ctx.fill();
-  // crown of embers
-  for(let i=-2;i<=2;i++){
-    const fl=0.5+0.5*Math.sin(state.time*5+i*1.7);
-    ctx.fillStyle=`rgba(255,${120+fl*100|0},50,${0.5+fl*0.5})`;
-    ctx.beginPath(); ctx.arc(sx+i*8,sy-b.r*sq-4-fl*6,2.6,0,TAU); ctx.fill();
+  const gl2=0.5+0.5*Math.sin(b.phase);
+  if(b.kind==='boneking'){
+    const bob=Math.sin(b.phase*0.7)*2;
+    ctx.fillStyle='#241c28';
+    ctx.beginPath();
+    ctx.moveTo(sx-14,sy-10+bob); ctx.quadraticCurveTo(sx-20,sy+10+bob,sx-8,sy+14+bob);
+    ctx.lineTo(sx+8,sy+14+bob); ctx.quadraticCurveTo(sx+20,sy+10+bob,sx+14,sy-10+bob);
+    ctx.closePath(); ctx.fill();
+    ctx.strokeStyle=flash?'#fff':'#e8e8e0'; ctx.fillStyle=flash?'#fff':'#e8e8e0';
+    ctx.lineWidth=4; ctx.lineCap='round';
+    ctx.beginPath(); ctx.arc(sx,sy-14+bob,9,0,TAU); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(sx,sy-4+bob); ctx.lineTo(sx,sy+8+bob);
+    ctx.moveTo(sx-8,sy+bob); ctx.lineTo(sx+8,sy+bob);
+    ctx.moveTo(sx-6,sy+5+bob); ctx.lineTo(sx+6,sy+5+bob);
+    ctx.stroke();
+    ctx.fillStyle='#ffd75e';
+    for(let i=-1;i<=1;i++){
+      ctx.beginPath();
+      ctx.moveTo(sx+i*5-2,sy-22+bob);
+      ctx.lineTo(sx+i*5,sy-30+bob);
+      ctx.lineTo(sx+i*5+2,sy-22+bob);
+      ctx.closePath(); ctx.fill();
+    }
+    ctx.fillStyle='#ff4b4b';
+    ctx.beginPath(); ctx.arc(sx-3.5,sy-15+bob,1.8,0,TAU); ctx.arc(sx+3.5,sy-15+bob,1.8,0,TAU); ctx.fill();
+    ctx.strokeStyle='#c8c8d0'; ctx.lineWidth=3;
+    ctx.beginPath(); ctx.moveTo(sx+14,sy-6+bob); ctx.lineTo(sx+30,sy-20+bob); ctx.stroke();
+  } else if(b.kind==='cindergolem'){
+    const sq=1+Math.sin(b.phase)*0.06;
+    ctx.fillStyle=flash?'#fff':'#4d3f45';
+    ctx.beginPath(); ctx.ellipse(sx,sy+4,b.r*0.9*sq,b.r*0.85/sq,0,0,TAU); ctx.fill();
+    ctx.fillStyle='#3a2f34';
+    ctx.beginPath(); ctx.ellipse(sx,sy-b.r*0.4,b.r*0.6*sq,b.r*0.5/sq,0,0,TAU); ctx.fill();
+    roundRect(sx-b.r-8,sy-8,14,20,5); ctx.fill();
+    roundRect(sx+b.r-6,sy-8,14,20,5); ctx.fill();
+    ctx.strokeStyle=`rgba(255,140,50,${0.55+gl2*0.4})`; ctx.lineWidth=2.5;
+    ctx.beginPath();
+    ctx.moveTo(sx-8,sy-10); ctx.lineTo(sx,sy-2); ctx.lineTo(sx-4,sy+10);
+    ctx.moveTo(sx+8,sy-8); ctx.lineTo(sx+4,sy+4);
+    ctx.stroke();
+    ctx.fillStyle=`rgba(255,190,90,${0.7+gl2*0.3})`;
+    ctx.beginPath(); ctx.arc(sx-6,sy-b.r*0.4,2.6,0,TAU); ctx.arc(sx+6,sy-b.r*0.4,2.6,0,TAU); ctx.fill();
+  } else if(b.kind==='malachar'){
+    const bob=Math.sin(b.phase*0.7)*3;
+    ctx.globalAlpha=0.88;
+    ctx.fillStyle=flash?'#fff':'#3c2a58';
+    ctx.beginPath();
+    ctx.moveTo(sx,sy-26+bob);
+    ctx.quadraticCurveTo(sx+18,sy-6+bob,sx+13,sy+12+bob);
+    ctx.lineTo(sx-13,sy+12+bob);
+    ctx.quadraticCurveTo(sx-18,sy-6+bob,sx,sy-26+bob);
+    ctx.fill();
+    ctx.globalAlpha=1;
+    ctx.fillStyle='#241a38';
+    ctx.beginPath(); ctx.arc(sx,sy-14+bob,8,0,TAU); ctx.fill();
+    ctx.fillStyle='#c46bff';
+    ctx.beginPath(); ctx.arc(sx-3,sy-15+bob,2,0,TAU); ctx.arc(sx+3,sy-15+bob,2,0,TAU); ctx.fill();
+    ctx.strokeStyle='#5a4030'; ctx.lineWidth=3;
+    ctx.beginPath(); ctx.moveTo(sx+15,sy-26+bob); ctx.lineTo(sx+19,sy+10+bob); ctx.stroke();
+    ctx.fillStyle=`rgba(200,120,255,${0.6+gl2*0.4})`;
+    ctx.beginPath(); ctx.arc(sx+15,sy-28+bob,4+gl2*1.5,0,TAU); ctx.fill();
+  } else if(b.kind==='pyrelord'){
+    for(let i=0;i<3;i++){
+      const wob=Math.sin(t*6+i*2)*4;
+      const rr=b.r*(1.05-i*0.28);
+      ctx.fillStyle=flash?'#fff':['rgba(255,110,40,0.85)','rgba(255,190,80,0.9)','rgba(255,240,200,0.95)'][i];
+      ctx.beginPath();
+      ctx.moveTo(sx,sy-rr*1.2+wob);
+      ctx.quadraticCurveTo(sx+rr,sy-rr*0.2,sx+rr*0.7,sy+rr*0.6);
+      ctx.quadraticCurveTo(sx,sy+rr*0.9,sx-rr*0.7,sy+rr*0.6);
+      ctx.quadraticCurveTo(sx-rr,sy-rr*0.2,sx,sy-rr*1.2+wob);
+      ctx.fill();
+    }
+    ctx.fillStyle='#2a0d06';
+    ctx.beginPath(); ctx.arc(sx-4,sy-2,2.2,0,TAU); ctx.arc(sx+4,sy-2,2.2,0,TAU); ctx.fill();
+    if(Math.random()<0.5) parts.push({x:b.x+rnd(-14,14),y:b.y+rnd(-6,14),vx:rnd(-14,14),vy:rnd(-70,-30),life:rnd(0.3,0.7),max:0.7,color:'#ff9a3d',size:2.4,grav:-20});
+  } else { // tyrant
+    const sq=1+Math.sin(b.phase)*0.08;
+    const gr=ctx.createRadialGradient(sx,sy,5,sx,sy,b.r*2.2);
+    gr.addColorStop(0,'rgba(255,110,40,0.35)'); gr.addColorStop(1,'rgba(255,110,40,0)');
+    ctx.fillStyle=gr; ctx.beginPath(); ctx.arc(sx,sy,b.r*2.2,0,TAU); ctx.fill();
+    ctx.fillStyle=flash?'#fff':(b.enraged?'#d33a1e':'#b3341c');
+    ctx.beginPath(); ctx.ellipse(sx,sy,b.r*sq,b.r/sq,0,0,TAU); ctx.fill();
+    ctx.fillStyle=flash?'#fff':'#7a2412';
+    ctx.beginPath(); ctx.ellipse(sx,sy+b.r*0.5,b.r*0.9*sq,b.r*0.45/sq,0,0,Math.PI); ctx.fill();
+    ctx.fillStyle='rgba(255,255,255,0.25)';
+    ctx.beginPath(); ctx.ellipse(sx-b.r*0.35,sy-b.r*0.4,b.r*0.25,b.r*0.16,-0.6,0,TAU); ctx.fill();
+    ctx.fillStyle='#ffe08a';
+    const ex=(player.x-b.x>0?3:-3);
+    ctx.beginPath(); ctx.arc(sx-8+ex,sy-7,3.8,0,TAU); ctx.arc(sx+8+ex,sy-7,3.8,0,TAU); ctx.fill();
+    ctx.fillStyle='#1a0505';
+    ctx.beginPath(); ctx.arc(sx-8+ex,sy-7,1.6,0,TAU); ctx.arc(sx+8+ex,sy-7,1.6,0,TAU); ctx.fill();
+    for(let i=-2;i<=2;i++){
+      const fl=0.5+0.5*Math.sin(t*5+i*1.7);
+      ctx.fillStyle=`rgba(255,${120+fl*100|0},50,${0.5+fl*0.5})`;
+      ctx.beginPath(); ctx.arc(sx+i*9,sy-b.r*sq-5-fl*6,2.8,0,TAU); ctx.fill();
+    }
   }
 }
 function drawArrows(){
-  ctx.strokeStyle='#d8c9a0'; ctx.lineWidth=2.5; ctx.lineCap='round';
+  ctx.lineCap='round';
   for(const a of arrows){
     const sx=a.x-cam.x, sy=a.y-cam.y;
-    const l=Math.hypot(a.vx,a.vy), nx=a.vx/l, ny=a.vy/l;
+    const l=Math.hypot(a.vx,a.vy)||1, nx=a.vx/l, ny=a.vy/l;
+    const col = a.kind==='void'?'#c46bff' : a.kind==='fire'?'#ff8a3d' : a.kind==='rock'?'#9a938b' : '#e8e2d0';
+    if(a.kind==='fire'||a.kind==='void'){
+      const gl=ctx.createRadialGradient(sx,sy,1,sx,sy,10);
+      gl.addColorStop(0,a.kind==='fire'?'rgba(255,140,60,0.5)':'rgba(196,107,255,0.5)');
+      gl.addColorStop(1,'rgba(0,0,0,0)');
+      ctx.fillStyle=gl; ctx.beginPath(); ctx.arc(sx,sy,10,0,TAU); ctx.fill();
+    }
+    ctx.strokeStyle=col;
+    ctx.lineWidth=a.kind==='rock'?4:2.5;
     ctx.beginPath(); ctx.moveTo(sx-nx*8,sy-ny*8); ctx.lineTo(sx+nx*4,sy+ny*4); ctx.stroke();
-    ctx.fillStyle='#e8e8e8';
-    ctx.beginPath(); ctx.arc(sx+nx*4,sy+ny*4,2,0,TAU); ctx.fill();
+    ctx.fillStyle='#fff';
+    ctx.beginPath(); ctx.arc(sx+nx*4,sy+ny*4,a.kind==='rock'?3:2,0,TAU); ctx.fill();
   }
 }
 function drawDrops(){
@@ -1071,65 +1877,97 @@ function drawTexts(){
   ctx.globalAlpha=1;
 }
 function drawDebug(){
-  const x0=Math.max(0,Math.floor(cam.x/TS)), x1=Math.min(W-1,Math.floor((cam.x+VW)/TS));
-  const y0=Math.max(0,Math.floor(cam.y/TS)), y1=Math.min(H-1,Math.floor((cam.y+VH)/TS));
+  const x0=Math.max(0,Math.floor(cam.x/TS)), x1=Math.min(mapW-1,Math.floor((cam.x+VW)/TS));
+  const y0=Math.max(0,Math.floor(cam.y/TS)), y1=Math.min(mapH-1,Math.floor((cam.y+VH)/TS));
   ctx.fillStyle='rgba(255,60,60,0.28)';
   for(let ty=y0;ty<=y1;ty++)for(let tx=x0;tx<=x1;tx++)
-    if(tileAt(tx,ty)===T_WATER) ctx.fillRect(tx*TS-cam.x,ty*TS-cam.y,TS,TS);
+    if(SOLID(tileAt(tx,ty))) ctx.fillRect(tx*TS-cam.x,ty*TS-cam.y,TS,TS);
   ctx.lineWidth=1.5;
   ctx.strokeStyle='rgba(80,220,255,0.9)';
-  for(const t of trees){
-    const sx=t.x-cam.x, sy=t.y-cam.y;
-    if(sx>-40&&sy>-40&&sx<VW+40&&sy<VH+40){ ctx.beginPath(); ctx.arc(sx,sy,t.cr,0,TAU); ctx.stroke(); }
+  for(const tr of trees){
+    const sx=tr.x-cam.x, sy=tr.y-cam.y;
+    if(sx>-40&&sy>-40&&sx<VW+40&&sy<VH+40){ ctx.beginPath(); ctx.arc(sx,sy,tr.cr,0,TAU); ctx.stroke(); }
   }
   ctx.strokeStyle='rgba(255,170,60,0.9)';
   for(const rk of rocks){
     const sx=rk.x-cam.x, sy=rk.y-cam.y;
-    if(sx>-40&&sy>-40&&sx<VW+40&&sy<VH+40){ ctx.beginPath(); ctx.arc(sx,sy,rk.r*0.55,0,TAU); ctx.stroke(); }
+    if(sx>-40&&sy>-40&&sx<VW+40&&sy<VH+40){ ctx.beginPath(); ctx.arc(sx,sy,rk.r*0.8,0,TAU); ctx.stroke(); }
   }
   ctx.strokeStyle='rgba(255,60,60,0.95)';
   for(const b of buildings) ctx.strokeRect(b.x-cam.x,b.y-cam.y,b.w,b.h);
   ctx.strokeStyle='rgba(120,255,120,0.9)';
   for(const n of npcs){ ctx.beginPath(); ctx.arc(n.x-cam.x,n.y-cam.y,n.r*0.8,0,TAU); ctx.stroke(); }
+  for(const c of chests) if(!c.opened){ ctx.beginPath(); ctx.arc(c.x-cam.x,c.y-cam.y,10,0,TAU); ctx.stroke(); }
+  for(const s of shrines){ ctx.beginPath(); ctx.arc(s.x-cam.x,s.y-cam.y,12,0,TAU); ctx.stroke(); }
   ctx.strokeStyle='#fff';
   ctx.beginPath(); ctx.arc(player.x-cam.x,player.y-cam.y,player.r,0,TAU); ctx.stroke();
   for(const e of enemies){ ctx.beginPath(); ctx.arc(e.x-cam.x,e.y-cam.y,e.r,0,TAU); ctx.stroke(); }
   ctx.font='bold 12px system-ui'; ctx.textAlign='center'; ctx.fillStyle='#ffd75e';
   ctx.fillText('COLLISION DEBUG — press B to hide',VW/2,26);
 }
-function roundRect(x,y,w,h,r){
-  ctx.beginPath();
-  ctx.moveTo(x+r,y);
-  ctx.arcTo(x+w,y,x+w,y+h,r);
-  ctx.arcTo(x+w,y+h,x,y+h,r);
-  ctx.arcTo(x,y+h,x,y,r);
-  ctx.arcTo(x,y,x+w,y,r);
-  ctx.closePath();
+
+/* ---------------- darkness & lighting ---------------- */
+const lightCvs=document.createElement('canvas');
+const lightCtx=lightCvs.getContext('2d');
+function drawDarkness(){
+  if(state.floor===0) return;
+  lightCtx.clearRect(0,0,VW,VH);
+  lightCtx.fillStyle=THEMES[state.floor].fog;
+  lightCtx.fillRect(0,0,VW,VH);
+  lightCtx.globalCompositeOperation='destination-out';
+  const t=state.time;
+  const hole=(x,y,r)=>{
+    if(x<-r||y<-r||x>VW+r||y>VH+r) return;
+    const g=lightCtx.createRadialGradient(x,y,r*0.25,x,y,r);
+    g.addColorStop(0,'rgba(0,0,0,1)'); g.addColorStop(1,'rgba(0,0,0,0)');
+    lightCtx.fillStyle=g;
+    lightCtx.beginPath(); lightCtx.arc(x,y,r,0,TAU); lightCtx.fill();
+  };
+  hole(player.x-cam.x,player.y-cam.y,190+45*player.lightLvl);
+  for(const tr of torches) hole(tr.x-cam.x,tr.y-cam.y,140+10*Math.sin(t*7+tr.fl*9));
+  for(const lv of lavas) hole(lv.x-cam.x,lv.y-cam.y,85);
+  for(const s of shrines) hole(s.x-cam.x,s.y-cam.y,s.active?125:75);
+  for(const c of chests) if(!c.opened) hole(c.x-cam.x,c.y-cam.y,48);
+  for(const d of drops) hole(d.x-cam.x,d.y-cam.y,42);
+  for(const e of enemies) if(e.elite) hole(e.x-cam.x,e.y-cam.y,70);
+  if(state.boss) hole(state.boss.x-cam.x,state.boss.y-cam.y,180);
+  if(state.portal) hole(state.portal.x-cam.x,state.portal.y-cam.y,135);
+  lightCtx.globalCompositeOperation='source-over';
+  ctx.drawImage(lightCvs,0,0);
 }
 
-/* ---------- HUD ---------- */
+/* ---------------- minimap ---------------- */
 let minimap=null;
 function buildMinimap(){
+  const W=mapW, H=mapH;
   const c=document.createElement('canvas'); c.width=W; c.height=H;
   const g=c.getContext('2d'), img=g.createImageData(W,H);
   for(let i=0;i<W*H;i++){
     const t=tiles[i];
-    const col = t===T_WATER?[38,92,150] : t===T_SAND?[205,185,130] : t===T_CORRUPT?[90,60,110] : [70,140,70];
+    let col;
+    if(state.floor===0){
+      col = t===T_WATER?[38,92,150] : t===T_SAND?[205,185,130] : t===T_CORRUPT?[90,60,110] :
+            t===T_STAIRSDOWN?[255,120,220] : [70,140,70];
+    } else {
+      const th=THEMES[state.floor];
+      col = t===T_WALL?[24,20,18] : t===T_LAVA?[255,106,42] :
+            t===T_STAIRSDOWN?[255,215,94] : t===T_STAIRSUP?[126,231,135] :
+            [parseInt(th.floorHi.slice(1,3),16),parseInt(th.floorHi.slice(3,5),16),parseInt(th.floorHi.slice(5,7),16)];
+    }
     img.data[i*4]=col[0]; img.data[i*4+1]=col[1]; img.data[i*4+2]=col[2]; img.data[i*4+3]=255;
   }
   g.putImageData(img,0,0);
   minimap=c;
 }
+
+/* ---------------- HUD ---------------- */
 function drawHUD(){
   const p=player;
-  // panel
   ctx.fillStyle='rgba(10,12,18,0.72)';
   roundRect(14,14,230,86,10); ctx.fill();
-  // level badge
   ctx.fillStyle='#ffd75e'; ctx.beginPath(); ctx.arc(38,40,14,0,TAU); ctx.fill();
   ctx.fillStyle='#1a1a1a'; ctx.font='bold 13px system-ui'; ctx.textAlign='center';
   ctx.fillText(p.level,38,45);
-  // hp bar
   const bx=60,by=32,bw=170;
   ctx.fillStyle='rgba(255,255,255,0.15)'; roundRect(bx,by,bw,12,6); ctx.fill();
   const hpr=clamp(p.hp/p.maxHp,0,1);
@@ -1137,10 +1975,8 @@ function drawHUD(){
   roundRect(bx,by,bw*hpr,12,6); ctx.fill();
   ctx.font='bold 10px system-ui'; ctx.fillStyle='#fff'; ctx.textAlign='left';
   ctx.fillText(Math.ceil(p.hp)+' / '+p.maxHp, bx+4, by+10);
-  // xp bar
   ctx.fillStyle='rgba(255,255,255,0.15)'; roundRect(bx,by+18,bw,8,4); ctx.fill();
   ctx.fillStyle='#4aa3e0'; roundRect(bx,by+18,bw*clamp(p.xp/xpNeed(),0,1),8,4); ctx.fill();
-  // gold & potions
   ctx.font='bold 13px system-ui';
   ctx.fillStyle='#ffd75e';
   ctx.beginPath(); ctx.arc(bx+7,by+42,5,0,TAU); ctx.fill();
@@ -1149,21 +1985,38 @@ function drawHUD(){
   roundRect(bx+78,by+37,7,11,2); ctx.fill();
   ctx.fillStyle='#c8c8d0'; ctx.fillRect(bx+80,by+34,3,4);
   ctx.fillStyle='#fff'; ctx.fillText('x'+p.potions, bx+90, by+47);
+  if(player.lightLvl>0){
+    ctx.fillStyle='#ffe08a'; ctx.font='10px system-ui';
+    ctx.fillText('Lantern Lv.'+player.lightLvl, bx+128, by+46);
+  }
   ctx.fillStyle='#c9d1d9'; ctx.font='11px system-ui';
-  ctx.fillText('Q potion · E talk · Space attack', 22, 92);
+  ctx.fillText('Q potion · E talk/interact · Space attack', 22, 92);
 
   // quest tracker
-  const q=state.quest1, q2=state.quest2;
+  const q=state.quest;
   let qy=118;
   const qline=(txt,col)=>{
-    ctx.fillStyle='rgba(10,12,18,0.6)'; roundRect(14,qy-13,210,20,6); ctx.fill();
+    ctx.fillStyle='rgba(10,12,18,0.6)'; roundRect(14,qy-13,240,20,6); ctx.fill();
     ctx.fillStyle=col; ctx.font='bold 11px system-ui'; ctx.textAlign='left';
     ctx.fillText(txt,22,qy+1); qy+=26;
   };
-  if(q.state==='active') qline('◈ Slimy Situation  '+q.kills+'/'+q.need,'#7ee787');
+  if(q.state==='active'){
+    qline('◈ '+QUESTS[q.id].title+' — '+QUESTS[q.id].goal,'#7ee787');
+    if(q.id==='q1') qline('   '+q.prog+' / 8 slimes slain','#9ad1ff');
+    if(q.id==='q4'){
+      qline('   Cinder Golem: '+(state.flags.golem?'✓':'—')+'   Malachar: '+(state.flags.malachar?'✓':'—'),'#9ad1ff');
+    }
+  }
   if(q.state==='ready') qline('◈ Return to Elder Maren!','#ffd75e');
-  if(q2.state==='active') qline('◈ Defeat the Ember Tyrant','#ff8a5e');
-  if(q2.state==='ready') qline('◈ Return to Elder Maren!','#ffd75e');
+
+  // shrine challenge notice
+  const s=shrines.find(s=>s.active);
+  if(s){
+    ctx.fillStyle='rgba(20,14,4,0.7)'; roundRect(14,qy-13,240,20,6); ctx.fill();
+    ctx.fillStyle='#ffd75e'; ctx.font='bold 11px system-ui';
+    ctx.fillText('✦ Shrine trial — '+s.left+' guardians left',22,qy+1);
+    qy+=26;
+  }
 
   // boss bar
   if(state.boss){
@@ -1173,38 +2026,34 @@ function drawHUD(){
     ctx.fillStyle='rgba(255,255,255,0.12)'; roundRect(x,24,w,12,6); ctx.fill();
     ctx.fillStyle=b.enraged?'#ff4b2e':'#d8451e'; roundRect(x,24,w*clamp(b.hp/b.maxHp,0,1),12,6); ctx.fill();
     ctx.fillStyle='#ffd75e'; ctx.font='bold 11px system-ui'; ctx.textAlign='center';
-    ctx.fillText('THE EMBER TYRANT'+(b.enraged?' — ENRAGED':''),VW/2,52);
+    ctx.fillText(BDEF[b.kind].name+(b.enraged?' — ENRAGED':''),VW/2,52);
   }
 
   // minimap
   if(minimap){
-    const s=138, mx=VW-s-16, my=16;
-    ctx.fillStyle='rgba(10,12,18,0.75)'; roundRect(mx-5,my-5,s+10,s+10,8); ctx.fill();
+    const s2=Math.min(138,VH*0.2), mx=VW-s2-16, my=16;
+    ctx.fillStyle='rgba(10,12,18,0.75)'; roundRect(mx-5,my-5,s2+10,s2+10,8); ctx.fill();
     ctx.imageSmoothingEnabled=false;
-    ctx.drawImage(minimap,mx,my,s,s);
+    ctx.drawImage(minimap,mx,my,s2,s2);
     ctx.imageSmoothingEnabled=true;
-    const sc=s/(W*TS);
-    // npc dots
-    ctx.fillStyle='#9ad1ff';
-    for(const n of npcs) ctx.fillRect(mx+n.x*sc-1.5,my+n.y*sc-1.5,3,3);
-    // boss
-    if(state.boss){ ctx.fillStyle='#ff4b2e';
-      ctx.fillRect(mx+state.boss.x*sc-3,my+state.boss.y*sc-3,6,6); }
-    // player
-    ctx.fillStyle='#fff';
-    ctx.fillRect(mx+p.x*sc-2,my+p.y*sc-2,4,4);
+    const sc=s2/(mapW*TS);
+    const dot=(x,y,c,sz)=>{ ctx.fillStyle=c; ctx.fillRect(mx+x*sc-sz/2,my+y*sc-sz/2,sz,sz); };
+    if(state.floor===0) for(const n of npcs) dot(n.x,n.y,'#9ad1ff',3);
+    for(const c2 of chests) if(!c2.opened) dot(c2.x,c2.y,'#ffd75e',2.5);
+    for(const sh of shrines) dot(sh.x,sh.y, sh.done?'#5a5a62':sh.active?'#ff9a3d':'#7ee7ff',3);
+    if(state.portal) dot(state.portal.x,state.portal.y,'#c46bff',4);
+    if(state.boss) dot(state.boss.x,state.boss.y,'#ff4b2e',5);
+    dot(player.x,player.y,'#fff',4);
     ctx.strokeStyle='rgba(255,255,255,0.25)'; ctx.lineWidth=1;
     ctx.strokeRect(mx+cam.x*sc,my+cam.y*sc,VW*sc,VH*sc);
     ctx.fillStyle='#c9d1d9'; ctx.font='10px system-ui'; ctx.textAlign='center';
-    ctx.fillText('Emberfall',mx+s/2,my+s+13);
+    ctx.fillText(state.floor===0?'Surface — Emberfall':'Floor '+state.floor+' · '+FLNAMES[state.floor],mx+s2/2,my+s2+13);
   }
 
-  // hurt vignette
   if(p.hurtFlash>0){
     ctx.fillStyle=`rgba(200,30,30,${p.hurtFlash*0.8})`;
     ctx.fillRect(0,0,VW,VH);
   }
-  // vignette
   const vg=ctx.createRadialGradient(VW/2,VH/2,Math.min(VW,VH)*0.42,VW/2,VH/2,Math.max(VW,VH)*0.72);
   vg.addColorStop(0,'rgba(0,0,0,0)'); vg.addColorStop(1,'rgba(0,0,0,0.42)');
   ctx.fillStyle=vg; ctx.fillRect(0,0,VW,VH);
@@ -1217,7 +2066,6 @@ function drawDialog(){
   roundRect(x,y,w,h,12); ctx.fill();
   ctx.strokeStyle='rgba(255,215,94,0.4)'; ctx.lineWidth=2;
   roundRect(x+3,y+3,w-6,h-6,10); ctx.stroke();
-  // portrait
   ctx.fillStyle='#5a3f9e';
   ctx.beginPath(); ctx.arc(x+40,y+52,24,0,TAU); ctx.fill();
   ctx.fillStyle='#f0c49a';
@@ -1227,8 +2075,7 @@ function drawDialog(){
   ctx.fillStyle='#ffd75e'; ctx.font='bold 15px system-ui'; ctx.textAlign='left';
   ctx.fillText(D.name,x+76,y+34);
   ctx.fillStyle='#e8e8f0'; ctx.font='14px system-ui';
-  const line=D.lines[D.page];
-  wrapText(line,x+76,y+58,w-100,19);
+  wrapText(D.lines[D.page],x+76,y+58,w-100,19);
   if(!D.options){
     ctx.fillStyle='rgba(255,255,255,0.55)'; ctx.font='11px system-ui'; ctx.textAlign='right';
     ctx.fillText((D.page<D.lines.length-1?'E / Enter — next':'E / Enter — close'), x+w-16, y+h-14);
@@ -1252,12 +2099,10 @@ function wrapText(txt,x,y,maxW,lh){
   ctx.fillText(line,x,yy);
 }
 
-/* ---------- screens ---------- */
+/* ---------------- screens ---------------- */
 function drawTitle(){
   ctx.fillStyle='#0b0e14'; ctx.fillRect(0,0,VW,VH);
-  // animated embers
   for(let i=0;i<50;i++){
-    const seed=i*7.3;
     const x=((hash2(i,3)*VW + state.time*12*(0.4+hash2(i,9)))% (VW+40))-20;
     const y=VH-((state.time*(20+hash2(i,5)*40)+hash2(i,7)*VH)%(VH+40));
     const a=0.25+0.35*Math.sin(state.time*3+i);
@@ -1266,34 +2111,33 @@ function drawTitle(){
   }
   ctx.textAlign='center';
   ctx.font='bold 64px Georgia,serif';
-  const grd=ctx.createLinearGradient(0,VH*0.3,0,VH*0.42);
+  const grd=ctx.createLinearGradient(0,VH*0.24,0,VH*0.36);
   grd.addColorStop(0,'#ffe08a'); grd.addColorStop(1,'#e2622a');
   ctx.fillStyle=grd;
-  ctx.fillText('EMBERFALL',VW/2,VH*0.4);
+  ctx.fillText('EMBERFALL',VW/2,VH*0.34);
   ctx.font='16px system-ui'; ctx.fillStyle='#c9d1d9';
-  ctx.fillText('a tiny action RPG — the Tyrant\'s embers must be snuffed out',VW/2,VH*0.4+34);
-  // controls card
-  const cw=430, ch=225, cx0=(VW-cw)/2, cy0=VH*0.55;
+  ctx.fillText('the Ember Depths stir — 5 floors, 5 guardians, one throne',VW/2,VH*0.34+34);
+  const cw=470, ch=245, cx0=(VW-cw)/2, cy0=VH*0.52;
   ctx.fillStyle='rgba(255,255,255,0.05)'; roundRect(cx0,cy0,cw,ch,12); ctx.fill();
   ctx.strokeStyle='rgba(255,215,94,0.3)'; ctx.lineWidth=1.5; roundRect(cx0,cy0,cw,ch,12); ctx.stroke();
   ctx.font='14px system-ui'; ctx.fillStyle='#e8e8f0'; ctx.textAlign='left';
   const rows=[
     ['WASD / Arrows','move'],
     ['Space / Click','attack (swing toward mouse)'],
-    ['E','talk / interact / advance dialog'],
+    ['E','talk / stairs / chests / shrines / portal'],
     ['Q','drink health potion'],
-    ['1–9','choose dialog options · P pause · M mute'],
-    ['B','show collision boxes (debug)'],
+    ['1–9','dialog choices · P pause · M mute'],
+    ['B','collision debug overlay'],
   ];
   rows.forEach((r,i)=>{
     ctx.fillStyle='#ffd75e'; ctx.font='bold 13px system-ui';
     ctx.fillText(r[0],cx0+30,cy0+34+i*30);
     ctx.fillStyle='#c9d1d9'; ctx.font='13px system-ui';
-    ctx.fillText(r[1],cx0+200,cy0+34+i*30);
+    ctx.fillText(r[1],cx0+185,cy0+34+i*30);
   });
   const bl=0.6+0.4*Math.sin(state.time*3);
   ctx.fillStyle=`rgba(255,215,94,${bl})`; ctx.font='bold 17px system-ui'; ctx.textAlign='center';
-  ctx.fillText('— Press ENTER or CLICK to begin —',VW/2,VH-38);
+  ctx.fillText('— Press ENTER or CLICK to begin —',VW/2,VH-30);
 }
 function drawDead(){
   ctx.fillStyle='rgba(20,4,4,0.72)'; ctx.fillRect(0,0,VW,VH);
@@ -1309,29 +2153,23 @@ function drawDead(){
 function drawVictory(){
   ctx.fillStyle='rgba(8,10,18,0.78)'; ctx.fillRect(0,0,VW,VH);
   for(let i=0;i<70;i++){
-    const seed=i*13.7;
     const x=hash2(i,1)*VW, y=VH-((state.time*35+hash2(i,2)*VH*2)%(VH+60));
     ctx.fillStyle=`rgba(255,${140+hash2(i,3)*100|0},60,${0.3+0.4*Math.sin(state.time*4+i)})`;
     ctx.fillRect(x,y,3,3);
   }
   ctx.textAlign='center';
   ctx.font='bold 48px Georgia,serif';
-  const grd=ctx.createLinearGradient(0,VH*0.3,0,VH*0.4);
+  const grd=ctx.createLinearGradient(0,VH*0.26,0,VH*0.36);
   grd.addColorStop(0,'#ffe08a'); grd.addColorStop(1,'#7ee787');
   ctx.fillStyle=grd;
-  ctx.fillText('EMBERFALL IS SAVED',VW/2,VH*0.38);
+  ctx.fillText('EMBERFALL IS SAVED',VW/2,VH*0.34);
   ctx.font='15px system-ui'; ctx.fillStyle='#e8e8f0';
-  ctx.fillText('The Ember Tyrant is no more. The hearth-fires burn bright once again.',VW/2,VH*0.38+36);
+  ctx.fillText('The Ember Tyrant is no more. All five guardians lie slain.',VW/2,VH*0.34+36);
   ctx.font='bold 15px system-ui'; ctx.fillStyle='#ffd75e';
-  ctx.fillText('Level '+player.level+'  ·  '+player.gold+' gold  ·  '+killCount+' foes slain  ·  '+Math.floor(playTime/60)+'m '+Math.floor(playTime%60)+'s',VW/2,VH*0.38+70);
-  if(state.quest2.state==='ready'){
-    ctx.fillStyle='#c9d1d9'; ctx.font='13px system-ui';
-    ctx.fillText('(Claim your final reward from Elder Maren, or keep exploring — press ENTER)',VW/2,VH*0.38+100);
-  } else {
-    const bl=0.6+0.4*Math.sin(state.time*3);
-    ctx.fillStyle=`rgba(255,255,255,${bl})`; ctx.font='bold 15px system-ui';
-    ctx.fillText('— Press ENTER to keep exploring —',VW/2,VH*0.38+104);
-  }
+  ctx.fillText('Level '+player.level+'  ·  '+player.gold+' gold  ·  '+killCount+' foes slain  ·  '+Math.floor(playTime/60)+'m '+Math.floor(playTime%60)+'s',VW/2,VH*0.34+70);
+  const bl=0.6+0.4*Math.sin(state.time*3);
+  ctx.fillStyle=`rgba(255,255,255,${bl})`; ctx.font='bold 15px system-ui';
+  ctx.fillText('— Press ENTER to keep exploring (a purple portal leads home) —',VW/2,VH*0.34+104);
 }
 function drawPaused(){
   ctx.fillStyle='rgba(8,10,18,0.6)'; ctx.fillRect(0,0,VW,VH);
@@ -1341,12 +2179,19 @@ function drawPaused(){
   ctx.font='14px system-ui'; ctx.fillStyle='#c9d1d9';
   ctx.fillText('Press P to resume',VW/2,VH/2+24);
 }
+function drawTrans(){
+  if(!state.trans) return;
+  const a=clamp(state.trans.t,0,1);
+  ctx.fillStyle=`rgba(5,4,8,${a})`;
+  ctx.fillRect(0,0,VW,VH);
+}
 
 /* ---------------- main loop ---------------- */
-genWorld();
+genSurface();
 spawnNPCs();
 buildMinimap();
 player.x=VILLAGE.x*TS+TS/2; player.y=(VILLAGE.y+2.2)*TS;
+resize();
 
 let last=performance.now();
 function frame(now){
@@ -1355,39 +2200,61 @@ function frame(now){
   update(dt);
   updateCam(dt);
 
-  // render world (with shake)
   let ox=0, oy=0;
-  if(state.shakeT>0){ const m=state.shakeMag*(state.shakeT); ox=rnd(-m,m); oy=rnd(-m,m); }
+  if(state.shakeT>0){ const m=state.shakeMag*state.shakeT; ox=rnd(-m,m); oy=rnd(-m,m); }
   ctx.save();
   ctx.translate(ox,oy);
 
-  ctx.fillStyle='#1a3a52'; ctx.fillRect(-20,-20,VW+40,VH+40); // water backdrop
+  ctx.fillStyle = state.floor===0 ? '#1a3a52' : THEMES[state.floor].bg;
+  ctx.fillRect(-30,-30,VW+60,VH+60);
   drawTiles();
-  drawFlowers();
+  for(const tr of torches){
+    const sx=tr.x-cam.x, sy=tr.y-cam.y;
+    if(sx>-30&&sy>-30&&sx<VW+30&&sy<VH+30) drawTorchOne(tr);
+  }
+  if(state.floor===0) drawFlowers();
 
   // depth-sorted entities
   const drawables=[];
-  for(const tr of trees){
-    const sx=tr.x-cam.x, sy=tr.y-cam.y;
-    if(sx>-60&&sy>-90&&sx<VW+60&&sy<VH+60) drawables.push({y:tr.y,fn:()=>drawTreeOne(tr)});
+  if(state.floor===0){
+    for(const tr of trees){
+      const sx=tr.x-cam.x, sy=tr.y-cam.y;
+      if(sx>-60&&sy>-90&&sx<VW+60&&sy<VH+60) drawables.push({y:tr.y,fn:()=>drawTreeOne(tr)});
+    }
+    for(const rk of rocks){
+      const sx=rk.x-cam.x, sy=rk.y-cam.y;
+      if(sx>-40&&sy>-40&&sx<VW+40&&sy<VH+40) drawables.push({y:rk.y,fn:()=>drawRockOne(rk)});
+    }
+    for(const n of npcs) drawables.push({y:n.y,fn:()=>drawNPC(n)});
+    if(entrance) drawables.push({y:entrance.y,fn:()=>drawPortalOne(entrance)});
   }
-  for(const n of npcs) drawables.push({y:n.y,fn:()=>drawNPC(n)});
-  for(const e of enemies) drawables.push({y:e.y,fn:()=>drawEnemy(e)});
-  for(const r of rocks) drawables.push({y:r.y,fn:()=>drawRocks()});
-  drawables.push({y:player.y,fn:drawPlayer});
+  for(const c of chests){
+    const sx=c.x-cam.x, sy=c.y-cam.y;
+    if(sx>-40&&sy>-40&&sx<VW+40&&sy<VH+40) drawables.push({y:c.y,fn:()=>drawChestOne(c)});
+  }
+  for(const s of shrines){
+    const sx=s.x-cam.x, sy=s.y-cam.y;
+    if(sx>-50&&sy>-50&&sx<VW+50&&sy<VH+50) drawables.push({y:s.y,fn:()=>drawShrineOne(s)});
+  }
+  if(state.portal) drawables.push({y:state.portal.y,fn:()=>drawPortalOne(state.portal)});
+  for(const e of enemies){
+    const sx=e.x-cam.x, sy=e.y-cam.y;
+    if(sx>-60&&sy>-60&&sx<VW+60&&sy<VH+60) drawables.push({y:e.y,fn:()=>drawEnemy(e)});
+  }
   if(state.boss) drawables.push({y:state.boss.y,fn:drawBoss});
+  drawables.push({y:player.y,fn:drawPlayer});
   drawables.sort((a,b)=>a.y-b.y);
-  drawRocks();
+
   drawBuildings();
   drawDrops();
   for(const d of drawables) d.fn();
   drawArrows();
   drawParticles();
   drawTexts();
+  drawDarkness();
   if(state.dbg) drawDebug();
   ctx.restore();
 
-  // overlays
   if(state.mode==='title') drawTitle();
   else {
     drawHUD();
@@ -1396,6 +2263,7 @@ function frame(now){
     if(state.mode==='dead') drawDead();
     if(state.mode==='victory') drawVictory();
   }
+  drawTrans();
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);

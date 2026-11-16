@@ -1,0 +1,114 @@
+/* ---------------- potions ---------------- */
+function drinkPotion(){
+  if(state.mode!=='play') return;
+  if(player.potions<=0){ addText(player.x,player.y-26,'No potions!','#ff9a9a'); sfx('denied'); return; }
+  if(player.hp>=player.maxHp){ addText(player.x,player.y-26,'Already at full health','#c9d1d9'); return; }
+  player.potions--; player.hp=Math.min(player.maxHp,player.hp+60);
+  addText(player.x,player.y-26,'+60 HP','#7ee787'); sfx('potion');
+  burst(player.x,player.y,'#7ee787',10,90,0.6,3);
+}
+
+/* ---------------- NPCs / dialog ---------------- */
+function nearNPC(){
+  for(const n of npcs) if(dist(n.x,n.y,player.x,player.y)<44) return n;
+  return null;
+}
+function openDialog(name,lines,options){
+  state.dialog={name,lines,page:0,options:options||null};
+}
+const QUEST_CLAIM={
+  q1(){ player.gold+=100; player.potions+=2; return '+100 gold, +2 potions. The Depths await...'; },
+  q2(){ player.gold+=150; player.potions+=1; return '+150 gold, +1 potion. Sharpen your blade.'; },
+  q3(){ player.gold+=200; player.armor+=1; return '+200 gold, +1 armor. The fires below grow hotter.'; },
+  q4(){ player.gold+=250; player.potions+=2; return '+250 gold, +2 potions. Ash storms brew on Floor 4.'; },
+  q5(){ player.gold+=150; return '+150 gold. Only one tyrant remains...'; },
+  q6(){ player.gold+=400; player.swordBonus+=10; return '+400 gold, the EMBER BLADE is yours! (+10 dmg)'; },
+};
+function elderDialog(){
+  const q=state.quest;
+  if(q.state==='none'){
+    openDialog('Elder Maren',[
+      'The fires of Emberfall grow cold, traveler...',
+      'Slimes crawl from the marshes and haunt our fields.',
+      'Slay 8 slimes and I will reward you from the village coffers.',
+    ],[
+      {label:'Accept quest',act(){ q.state='active'; q.prog=0; sfx('quest');
+        addText(player.x,player.y-30,'Quest: Slimy Situation (0/8)','#7ee787',2,true); state.dialog=null; }},
+      {label:'Not now',act(){ state.dialog=null; }},
+    ]);
+    return;
+  }
+  if(q.state==='active'){
+    if(questDone(q.id)){ q.state='ready'; }
+    else {
+      const msgs={
+        q1:'The slimes still crawl... ('+q.prog+' / 8 slain)',
+        q2:'A stairway has opened at the heart of the corrupted wastes.',
+        q3:'The Bone King rules the first floor of the Depths.',
+        q4:'Two fires remain: the Cinder Golem (F2) and Malachar (F3).',
+        q5:'Pyrelord Vex storms the Ashen Deep (F4).',
+        q6:'The EMBER TYRANT sits on its throne (F5). End this.',
+      };
+      openDialog('Elder Maren',[msgs[q.id],'Come back when it is done.']);
+      return;
+    }
+  }
+  if(q.state==='ready'){
+    const reward=QUEST_CLAIM[q.id]();
+    sfx('quest');
+    const next=QUEST_ORDER[(QUEST_ORDER.indexOf(q.id)+1)];
+    if(q.id==='q6'){
+      q.state='done';
+      addText(player.x,player.y-34,'EMBERFALL IS SAVED!','#ffd75e',3.5,true);
+      openDialog('Elder Maren',[
+        'You... you truly did it. The Tyrant is no more!',
+        'The hearth-fires burn bright once again.',
+        'Emberfall is saved. You are a legend, traveler.',
+      ],[{label:'Claim final reward',act(){
+        addText(player.x,player.y-30,reward,'#ffd75e',3,true);
+        state.dialog=null;
+      }}]);
+      return;
+    }
+    q.id=next; q.state='active'; q.prog=0;
+    addText(player.x,player.y-30,'Quest: '+QUESTS[next].title,'#7ee787',2.5,true);
+    addText(player.x,player.y-56,reward,'#ffd75e',2.5,true);
+    openDialog('Elder Maren',[
+      reward,
+      'New task: '+QUESTS[next].goal,
+    ],[{label:'Onward',act(){ state.dialog=null; }}]);
+    return;
+  }
+  openDialog('Elder Maren',['The hearth burns warm again, thanks to you.','Rest, hero of Emberfall — or delve once more.']);
+}
+function merchantDialog(){
+  const swordPrice=120*Math.pow(2,player.swordLvl);
+  const armorPrice=150*Math.pow(2,player.armorLvl);
+  const lanternPrice=80*Math.pow(2,player.lightLvl);
+  openDialog('Finn the Trader',[
+    'Psst! Finest wares in all of Emberfall — and the Depths below!',
+    'You have '+player.gold+' gold.',
+  ],[
+    {label:'Buy Health Potion — 25g',act(){
+      if(player.gold>=25){ player.gold-=25; player.potions++; sfx('buy'); addText(player.x,player.y-26,'+1 potion','#ff7b8f'); }
+      else { sfx('denied'); addText(player.x,player.y-26,'Not enough gold!','#ff9a9a'); }
+      merchantDialog(); }},
+    {label:'Sharpen Blade +8 dmg — '+swordPrice+'g',act(){
+      if(player.gold>=swordPrice){ player.gold-=swordPrice; player.swordBonus+=8; player.swordLvl++; sfx('buy');
+        addText(player.x,player.y-26,'Blade sharpened!','#ffd75e'); }
+      else { sfx('denied'); addText(player.x,player.y-26,'Not enough gold!','#ff9a9a'); }
+      merchantDialog(); }},
+    {label:'Reinforce Armor — '+armorPrice+'g',act(){
+      if(player.gold>=armorPrice){ player.gold-=armorPrice; player.armor++; player.armorLvl++; sfx('buy');
+        addText(player.x,player.y-26,'Armor reinforced!','#9ad1ff'); }
+      else { sfx('denied'); addText(player.x,player.y-26,'Not enough gold!','#ff9a9a'); }
+      merchantDialog(); }},
+    {label:'Lantern Upgrade — '+lanternPrice+'g'+(player.lightLvl>=3?' (MAX)':''),act(){
+      if(player.lightLvl>=3){ sfx('denied'); addText(player.x,player.y-26,'Lantern already burning bright!','#c9d1d9'); }
+      else if(player.gold>=lanternPrice){ player.gold-=lanternPrice; player.lightLvl++; sfx('buy');
+        addText(player.x,player.y-26,'Lantern upgraded! You see further in the dark.','#ffe08a'); }
+      else { sfx('denied'); addText(player.x,player.y-26,'Not enough gold!','#ff9a9a'); }
+      merchantDialog(); }},
+    {label:'Leave',act(){ state.dialog=null; }},
+  ]);
+}

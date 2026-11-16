@@ -1,0 +1,85 @@
+/* ---------------- combat ---------------- */
+function damageEnemy(e,dmg,kx,ky){
+  e.hp-=dmg; e.flash=0.15;
+  const kf=1-(e.kbr||0);
+  e.kb.x+=kx*kf; e.kb.y+=ky*kf;
+  addText(e.x+rnd(-8,8), e.y-e.r-6, Math.round(dmg), '#ffd75e');
+  burst(e.x,e.y,'#ff7b54',6,110,0.35,2.5);
+  sfx('hit');
+  if(e.hp<=0) killEnemy(e);
+}
+function killEnemy(e){
+  const idx=enemies.indexOf(e); if(idx<0) return;
+  enemies.splice(idx,1);
+  burst(e.x,e.y, e.type==='slime'?'#5fce62': e.type==='skeleton'?'#e8e8e8': e.type==='bat'?'#8a6ea0':'#b06ce2', 14,140,0.6,3.5);
+  sfx('die');
+  gainXp(e.xp);
+  killCount++;
+  if(e.shrineRef){
+    e.shrineRef.left--;
+    if(e.shrineRef.left<=0 && e.shrineRef.active){
+      e.shrineRef.active=false; e.shrineRef.done=true;
+      state.doneShrines.add(e.shrineRef.id);
+      sfx('reward');
+      addText(e.shrineRef.x,e.shrineRef.y-30,'Shrine cleared — take its blessing!','#7ee787',2.4,true);
+      burst(e.shrineRef.x,e.shrineRef.y,'#7ee787',30,180,0.9,4);
+      for(let i=0;i<8;i++) drops.push({type:'coin',x:e.shrineRef.x+rnd(-26,26),y:e.shrineRef.y+rnd(-26,26),val:Math.ceil(rnd(4,9)),t:rnd(TAU),vx:rnd(-70,70),vy:rnd(-70,70)});
+      for(let i=0;i<2;i++) drops.push({type:'potion',x:e.shrineRef.x+rnd(-20,20),y:e.shrineRef.y+rnd(-20,20),t:rnd(TAU),vx:0,vy:0});
+      for(let i=0;i<2;i++) drops.push({type:'gem',x:e.shrineRef.x+rnd(-16,16),y:e.shrineRef.y+rnd(-16,16),val:Math.ceil(rnd(25,60)),t:rnd(TAU),vx:rnd(-40,40),vy:rnd(-40,40)});
+    }
+  }
+  if(state.quest.id==='q1' && state.quest.state==='active' && e.type==='slime'){
+    state.quest.prog++;
+    if(state.quest.prog>=8){ state.quest.state='ready';
+      addText(player.x,player.y-30,'Quest ready! Return to Elder Maren','#7ee787',2,true); sfx('quest'); }
+  }
+  const ncoins=1+((Math.random()*3)|0);
+  for(let i=0;i<ncoins;i++) drops.push({type:'coin',x:e.x+rnd(-8,8),y:e.y+rnd(-8,8),val:Math.ceil(rnd(1,5)),t:rnd(TAU),vx:rnd(-40,40),vy:rnd(-40,40)});
+  if(Math.random()<0.12 || e.elite) drops.push({type:'potion',x:e.x,y:e.y,t:rnd(TAU),vx:0,vy:0});
+  if(Math.random()<0.28 || e.elite) drops.push({type:'gem',x:e.x+rnd(-6,6),y:e.y+rnd(-6,6),val:Math.ceil(e.xp*0.4),t:rnd(TAU),vx:rnd(-30,30),vy:rnd(-30,30)});
+}
+function gainXp(v){
+  player.xp+=v;
+  addText(player.x+rnd(-6,6),player.y-24,'+'+v+' xp','#9ad1ff',0.8);
+  let need=xpNeed();
+  while(player.xp>=need){
+    player.xp-=need; player.level++;
+    player.maxHp+=20; player.hp=Math.min(player.maxHp,player.hp+player.maxHp*0.5);
+    player.dmg+=3;
+    need=xpNeed();
+    addText(player.x,player.y-40,'LEVEL UP!  Lv.'+player.level,'#ffd75e',1.6,true);
+    burst(player.x,player.y,'#ffd75e',22,170,0.8,4);
+    sfx('level');
+  }
+}
+function hurtPlayer(dmg,fromX,fromY){
+  if(player.invulnT>0 || state.mode!=='play') return;
+  const red=1-Math.min(0.5,player.armor*0.08);
+  const d=Math.max(1,Math.round(dmg*red));
+  player.hp-=d; player.invulnT=0.7; player.hurtFlash=0.3;
+  addText(player.x,player.y-26,'-'+d,'#ff6b6b');
+  const a=Math.atan2(player.y-fromY,player.x-fromX);
+  moveEntity(player,Math.cos(a)*14,Math.sin(a)*14);
+  shake(0.25,5); sfx('hurt');
+  if(player.hp<=0){
+    player.hp=0; state.mode='dead'; sfx('die');
+    burst(player.x,player.y,'#ff6b6b',24,160,0.9,4);
+  }
+}
+function doAttack(dirAng){
+  if(player.atkCd>0) return;
+  player.atkCd=0.38; player.swingT=0.18; player.swingDir=dirAng;
+  player.face.x=Math.cos(dirAng); player.face.y=Math.sin(dirAng);
+  sfx('swing');
+  const range=48, dmg=player.dmg+player.swordBonus;
+  for(const e of [...enemies, ...(state.boss?[state.boss]:[])]){
+    const d=dist(player.x,player.y,e.x,e.y);
+    if(d>range+e.r) continue;
+    const a=Math.atan2(e.y-player.y,e.x-player.x);
+    let diff=Math.abs(((a-dirAng)%TAU+TAU+Math.PI)%TAU-Math.PI);
+    if(diff<1.25){
+      const kx=Math.cos(a)*180, ky=Math.sin(a)*180;
+      if(e===state.boss) damageBoss(dmg,kx,ky); else damageEnemy(e,dmg,kx,ky);
+    }
+  }
+}

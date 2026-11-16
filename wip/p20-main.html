@@ -1,0 +1,84 @@
+/* ---------------- main loop ---------------- */
+genSurface();
+spawnNPCs();
+buildMinimap();
+player.x=VILLAGE.x*TS+TS/2; player.y=(VILLAGE.y+2.2)*TS;
+resize();
+
+let last=performance.now();
+function frame(now){
+  const dt=clamp((now-last)/1000,0,0.05);
+  last=now;
+  update(dt);
+  updateCam(dt);
+
+  let ox=0, oy=0;
+  if(state.shakeT>0){ const m=state.shakeMag*state.shakeT; ox=rnd(-m,m); oy=rnd(-m,m); }
+  ctx.save();
+  ctx.translate(ox,oy);
+
+  ctx.fillStyle = state.floor===0 ? '#1a3a52' : THEMES[state.floor].bg;
+  ctx.fillRect(-30,-30,VW+60,VH+60);
+  drawTiles();
+  for(const tr of torches){
+    const sx=tr.x-cam.x, sy=tr.y-cam.y;
+    if(sx>-30&&sy>-30&&sx<VW+30&&sy<VH+30) drawTorchOne(tr);
+  }
+  if(state.floor===0) drawFlowers();
+
+  // depth-sorted entities
+  const drawables=[];
+  if(state.floor===0){
+    for(const tr of trees){
+      const sx=tr.x-cam.x, sy=tr.y-cam.y;
+      if(sx>-60&&sy>-90&&sx<VW+60&&sy<VH+60) drawables.push({y:tr.y,fn:()=>drawTreeOne(tr)});
+    }
+    for(const rk of rocks){
+      const sx=rk.x-cam.x, sy=rk.y-cam.y;
+      if(sx>-40&&sy>-40&&sx<VW+40&&sy<VH+40) drawables.push({y:rk.y,fn:()=>drawRockOne(rk)});
+    }
+    for(const n of npcs) drawables.push({y:n.y,fn:()=>drawNPC(n)});
+    if(entrance) drawables.push({y:entrance.y,fn:()=>drawPortalOne(entrance)});
+  }
+  for(const c of chests){
+    const sx=c.x-cam.x, sy=c.y-cam.y;
+    if(sx>-40&&sy>-40&&sx<VW+40&&sy<VH+40) drawables.push({y:c.y,fn:()=>drawChestOne(c)});
+  }
+  for(const s of shrines){
+    const sx=s.x-cam.x, sy=s.y-cam.y;
+    if(sx>-50&&sy>-50&&sx<VW+50&&sy<VH+50) drawables.push({y:s.y,fn:()=>drawShrineOne(s)});
+  }
+  if(state.portal) drawables.push({y:state.portal.y,fn:()=>drawPortalOne(state.portal)});
+  for(const e of enemies){
+    const sx=e.x-cam.x, sy=e.y-cam.y;
+    if(sx>-60&&sy>-60&&sx<VW+60&&sy<VH+60) drawables.push({y:e.y,fn:()=>drawEnemy(e)});
+  }
+  if(state.boss) drawables.push({y:state.boss.y,fn:drawBoss});
+  drawables.push({y:player.y,fn:drawPlayer});
+  drawables.sort((a,b)=>a.y-b.y);
+
+  drawBuildings();
+  drawDrops();
+  for(const d of drawables) d.fn();
+  drawArrows();
+  drawParticles();
+  drawTexts();
+  drawDarkness();
+  if(state.dbg) drawDebug();
+  ctx.restore();
+
+  if(state.mode==='title') drawTitle();
+  else {
+    drawHUD();
+    drawDialog();
+    if(state.paused) drawPaused();
+    if(state.mode==='dead') drawDead();
+    if(state.mode==='victory') drawVictory();
+  }
+  drawTrans();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
