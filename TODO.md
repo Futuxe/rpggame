@@ -7,8 +7,12 @@
 
 ## Status
 
-- ✅ `emberfall.html` — v1 playable browser game, live on GitHub (commit 9c86baf)
-- 🚧 **v2 upgrade in progress** — user request: "fix movement bugs and make it bigger: more levels, more enemies"
+- ✅ `emberfall.html` — v1 playable browser game, live on GitHub
+- ✅ **v1.1 SHIPPED — "invisible barriers" root-caused and fixed.** Two causes:
+  1. `drawTrees()` was NEVER CALLED in the render loop → trees were literally invisible walls. Now every visible tree is pushed into the depth-sorted `drawables` list (`drawTreeOne(tr)`), trunks raised/lengthened so they're clearly visible under canopies.
+  2. Tree collision circles were huge (cr=9) + dense forests → impassable walls that looked like gaps. Fixed: `cr=5.5` (trunk-size), forest density 0.8→0.55, player r 11→10, per-cell tree LISTS in `treeGrid` (no more overwrites), wall-slide assist in `moveEntity` (35% retry), camera centers world when viewport > map, `window blur` clears keys, movement blocked during dialogs, hold-mouse = continuous attack, `findFreeSpot()` anti-stuck safety net.
+  3. Press **B** in-game = collision debug overlay (red tiles, cyan tree circles, orange rocks, white player) to verify no invisible walls.
+- 🚧 **v2 upgrade in progress** — user request: "make it bigger: more levels, more enemies"
 - 🚧 `wip/emberfall-v2-part1.html` — PART 1 of the v2 rewrite is DONE (core engine, audio, surface + dungeon worldgen, collision). It is a standalone partial file ending with a `PART2_PLACEHOLDER` script tag — the parts were meant to be concatenated into the final `emberfall.html`.
 
 ## What v2 adds (agreed design)
