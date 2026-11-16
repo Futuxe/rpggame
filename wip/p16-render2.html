@@ -114,6 +114,103 @@ function drawBoss(){
       ctx.fillStyle=`rgba(255,${120+fl*100|0},50,${0.5+fl*0.5})`;
       ctx.beginPath(); ctx.arc(sx+i*9,sy-b.r*sq-5-fl*6,2.8,0,TAU); ctx.fill();
     }
+  } else if(b.kind==='frostmaw'){
+    // hulking rime beast: white bulk, icy plates, freezing breath
+    const sq=1+Math.sin(b.phase*0.9)*0.06;
+    const gr=ctx.createRadialGradient(sx,sy,4,sx,sy,b.r*2);
+    gr.addColorStop(0,'rgba(154,209,255,0.3)'); gr.addColorStop(1,'rgba(154,209,255,0)');
+    ctx.fillStyle=gr; ctx.beginPath(); ctx.arc(sx,sy,b.r*2,0,TAU); ctx.fill();
+    ctx.fillStyle=flash?'#fff':'#dfe9f2';
+    ctx.beginPath(); ctx.ellipse(sx,sy,b.r*sq,b.r*0.8/sq,0,0,TAU); ctx.fill();
+    ctx.fillStyle=flash?'#fff':'#b8d4e8';
+    ctx.beginPath(); ctx.arc(sx,sy-b.r*0.55,b.r*0.55,0,TAU); ctx.fill();
+    ctx.fillStyle='#8fb6d8';
+    for(let i=-2;i<=2;i++){
+      ctx.beginPath();
+      ctx.moveTo(sx+i*b.r*0.34-5,sy+2);
+      ctx.lineTo(sx+i*b.r*0.34,sy-b.r*0.9);
+      ctx.lineTo(sx+i*b.r*0.34+5,sy+2);
+      ctx.closePath(); ctx.fill();
+    }
+    ctx.fillStyle='#2b5f8e';
+    ctx.beginPath(); ctx.arc(sx-7,sy-b.r*0.6,3,0,TAU); ctx.arc(sx+7,sy-b.r*0.6,3,0,TAU); ctx.fill();
+    ctx.fillStyle='#e8f4ff';
+    for(let i=0;i<4;i++){
+      const fl2=0.4+0.3*Math.sin(t*6+i*1.9);
+      ctx.beginPath(); ctx.arc(sx-16+i*11,sy+b.r*0.75,2.4+fl2,0,TAU); ctx.fill();
+    }
+  } else if(b.kind==='bogqueen'){
+    // spectral marsh queen: drifting robes, crown of reeds, toxic orb
+    const bob=Math.sin(b.phase*0.7)*3;
+    ctx.globalAlpha=0.85;
+    ctx.fillStyle=flash?'#fff':'#3d6b52';
+    ctx.beginPath();
+    ctx.moveTo(sx,sy-26+bob);
+    ctx.quadraticCurveTo(sx+20,sy-4+bob,sx+13,sy+13+bob);
+    ctx.quadraticCurveTo(sx+5,sy+6+bob,sx,sy+13+bob);
+    ctx.quadraticCurveTo(sx-5,sy+6+bob,sx-13,sy+13+bob);
+    ctx.quadraticCurveTo(sx-20,sy-4+bob,sx,sy-26+bob);
+    ctx.fill();
+    ctx.globalAlpha=1;
+    ctx.fillStyle='#2a4d3a';
+    ctx.beginPath(); ctx.arc(sx,sy-13+bob,7.5,0,TAU); ctx.fill();
+    ctx.strokeStyle='#7ecba0'; ctx.lineWidth=2; ctx.lineCap='round';
+    for(let i=-2;i<=2;i++){
+      ctx.beginPath();
+      ctx.moveTo(sx+i*4,sy-19+bob);
+      ctx.quadraticCurveTo(sx+i*6,sy-27+bob,sx+i*3+Math.sin(t*2.4+i)*2,sy-32+bob);
+      ctx.stroke();
+    }
+    const gl=0.5+0.5*Math.sin(t*3+b.phase);
+    ctx.fillStyle=`rgba(126,203,160,${0.6+gl*0.4})`;
+    ctx.beginPath(); ctx.arc(sx,sy-13+bob,2.4,0,TAU); ctx.fill();
+    ctx.fillStyle=`rgba(126,232,160,${0.5+gl*0.4})`;
+    ctx.beginPath(); ctx.arc(sx+13,sy-4+bob,4+gl*1.5,0,TAU); ctx.fill();
+  } else if(b.kind==='crystaltyrant'){
+    // prismatic golem of floating crystal spires
+    const gr=ctx.createRadialGradient(sx,sy,4,sx,sy,b.r*2.1);
+    gr.addColorStop(0,'rgba(201,160,255,0.32)'); gr.addColorStop(1,'rgba(201,160,255,0)');
+    ctx.fillStyle=gr; ctx.beginPath(); ctx.arc(sx,sy,b.r*2.1,0,TAU); ctx.fill();
+    ctx.fillStyle=flash?'#fff':'#6a56a8';
+    ctx.beginPath();
+    ctx.moveTo(sx,sy-b.r); ctx.lineTo(sx+b.r*0.75,sy-2); ctx.lineTo(sx+b.r*0.5,sy+b.r*0.8);
+    ctx.lineTo(sx-b.r*0.5,sy+b.r*0.8); ctx.lineTo(sx-b.r*0.75,sy-2);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle=flash?'#fff':'#9a7fd8';
+    for(let i=-1;i<=1;i++){
+      const ox=i*b.r*0.42, h=b.r*(i===0?1.15:0.7);
+      ctx.beginPath();
+      ctx.moveTo(sx+ox,sy-b.r*0.3-h); ctx.lineTo(sx+ox+6,sy-b.r*0.2);
+      ctx.lineTo(sx+ox-6,sy-b.r*0.2);
+      ctx.closePath(); ctx.fill();
+    }
+    const gl=0.5+0.5*Math.sin(t*4+b.phase);
+    ctx.fillStyle=`rgba(240,225,255,${0.55+gl*0.45})`;
+    ctx.beginPath(); ctx.arc(sx,sy-b.r*0.15,3.2,0,TAU); ctx.fill();
+    ctx.strokeStyle=`rgba(255,255,255,${0.25+gl*0.3})`; ctx.lineWidth=1.2;
+    ctx.beginPath(); ctx.moveTo(sx,sy-b.r*0.15); ctx.lineTo(sx+8,sy-14); ctx.lineTo(sx-6,sy-22); ctx.stroke();
+  } else { // duneserpent
+    // segmented sand serpent arcing out of the dunes
+    const gr=ctx.createRadialGradient(sx,sy,4,sx,sy,b.r*2);
+    gr.addColorStop(0,'rgba(255,179,107,0.26)'); gr.addColorStop(1,'rgba(255,179,107,0)');
+    ctx.fillStyle=gr; ctx.beginPath(); ctx.arc(sx,sy,b.r*2,0,TAU); ctx.fill();
+    for(let i=4;i>=1;i--){
+      const wob=Math.sin(t*4-i*1.1)*7;
+      const px=sx-Math.cos(t*0.7)*i*13*0.6, py=sy+Math.sin(t*3-i)*i*2.4+wob*0.4;
+      const rr=b.r*(0.85-i*0.13);
+      ctx.fillStyle=flash?'#fff':(i%2?'#c38a4c':'#a86f38');
+      ctx.beginPath(); ctx.ellipse(px,py,rr,rr*0.72,0,0,TAU); ctx.fill();
+    }
+    const hx=sx+Math.sin(t*0.9)*4, hy=sy-6+Math.sin(t*3)*2;
+    ctx.fillStyle=flash?'#fff':'#d8a05c';
+    ctx.beginPath(); ctx.ellipse(hx,hy,b.r*0.62,b.r*0.45,0.3,0,TAU); ctx.fill();
+    ctx.fillStyle='#ffe08a';
+    ctx.beginPath(); ctx.arc(hx-4,hy-3,2.6,0,TAU); ctx.arc(hx+4,hy-3,2.6,0,TAU); ctx.fill();
+    ctx.fillStyle='#1a0d05';
+    ctx.beginPath(); ctx.arc(hx-4,hy-3,1.1,0,TAU); ctx.arc(hx+4,hy-3,1.1,0,TAU); ctx.fill();
+    ctx.strokeStyle='#8a5a2c'; ctx.lineWidth=2; ctx.lineCap='round';
+    ctx.beginPath(); ctx.moveTo(hx-2,hy+6); ctx.lineTo(hx-4,hy+10);
+    ctx.moveTo(hx+2,hy+6); ctx.lineTo(hx+4,hy+10); ctx.stroke();
   }
 }
 function drawArrows(){

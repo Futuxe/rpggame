@@ -1,4 +1,61 @@
 /* ---------------- HUD ---------------- */
+function fmtTime(s){
+  s=Math.max(0,Math.ceil(s));
+  return Math.floor(s/60)+':'+String(s%60).padStart(2,'0');
+}
+/* quickbar geometry shared by input hit-testing and drawing (top-right) */
+function qbarLayout(){
+  const n=QUICKBAR.length, w=44, gap=6;
+  const total=n*w+(n-1)*gap;
+  const x0=VW-total-16, y0=14;
+  const arr=[];
+  for(let i=0;i<n;i++) arr.push({x:x0+i*(w+gap),y:y0,w,h:w});
+  return arr;
+}
+function drawQuickbar(){
+  const rects=qbarLayout(), t=state.time;
+  rects.forEach((r,i)=>{
+    const s=QUICKBAR[i];
+    const sel=state.selSlot===i;
+    const cnt=s.count?s.count():null;
+    const empty=cnt!==null&&cnt<=0;
+    if(sel && state.slotFlash>0){
+      ctx.fillStyle=`rgba(255,215,94,${state.slotFlash*1.2})`;
+      roundRect(r.x-2,r.y-2,r.w+4,r.h+4,9); ctx.fill();
+    }
+    ctx.fillStyle=sel?'rgba(64,54,20,0.85)':'rgba(10,12,18,0.72)';
+    roundRect(r.x,r.y,r.w,r.h,8); ctx.fill();
+    ctx.strokeStyle=sel?`rgba(255,215,94,${0.75+0.25*Math.sin(t*7)})`:empty?'rgba(255,255,255,0.10)':'rgba(255,255,255,0.3)';
+    ctx.lineWidth=sel?2.5:1.5;
+    roundRect(r.x,r.y,r.w,r.h,8); ctx.stroke();
+    // icon
+    ctx.textAlign='center';
+    ctx.font='bold 17px system-ui';
+    ctx.fillStyle=empty?'rgba(255,255,255,0.28)':s.color;
+    const icon=s.id==='sword'?'⚔':s.id==='bow'?'➶':s.id==='potion'?'✚':s.id==='brew'?'✊':'⚡';
+    ctx.fillText(icon,r.x+r.w/2,r.y+r.h/2+7);
+    // slot number
+    ctx.font='bold 9px system-ui';
+    ctx.fillStyle='rgba(255,255,255,0.55)';
+    ctx.fillText(String(i+1),r.x+r.w/2,r.y+11);
+    // count
+    if(cnt!==null){
+      ctx.font='bold 10px system-ui';
+      ctx.textAlign='right';
+      ctx.fillStyle=empty?'#8b949e':'#fff';
+      ctx.fillText('x'+cnt,r.x+r.w-4,r.y+r.h-4);
+    }
+    // chug progress floods this slot while drinking it
+    if(player.drinkKind===s.id){
+      const prog=clamp(player.drinkT/player.drinkMax,0,1);
+      ctx.fillStyle='rgba(0,0,0,0.5)';
+      roundRect(r.x,r.y+r.h*(1-prog),r.w,r.h*prog,6); ctx.fill();
+    }
+  });
+  ctx.font='9px system-ui'; ctx.fillStyle='rgba(255,255,255,0.42)'; ctx.textAlign='center';
+  const bw=rects[4].x+rects[4].w-rects[0].x;
+  ctx.fillText('1-5 / click · LMB use',rects[0].x+bw/2,rects[0].y+rects[0].h+13);
+}
 function drawHUD(){
   const p=player;
   ctx.fillStyle='rgba(10,12,18,0.72)';
@@ -30,9 +87,36 @@ function drawHUD(){
   ctx.fillStyle='#c9d1d9'; ctx.font='11px system-ui';
   ctx.fillText('Q potion · E talk/interact · Space attack', 22, 92);
 
+  /* active effects — icons with minutes:seconds, right above the health bar */
+  let qy=118;
+  let chipY=104;
+  const chip=(color,icon,label,big)=>{
+    const w=big?78:66;
+    ctx.fillStyle='rgba(10,12,18,0.74)'; roundRect(14,chipY,w,22,6); ctx.fill();
+    ctx.strokeStyle=color; ctx.lineWidth=1.2; roundRect(14,chipY,w,22,6); ctx.stroke();
+    ctx.fillStyle=color; ctx.beginPath(); ctx.arc(26,chipY+11,7,0,TAU); ctx.fill();
+    ctx.fillStyle='#14121a'; ctx.font='bold 10px system-ui'; ctx.textAlign='center';
+    ctx.fillText(icon,26,chipY+14.5);
+    ctx.fillStyle='#fff'; ctx.font='bold 11px system-ui'; ctx.textAlign='left';
+    ctx.fillText(label,38,chipY+15);
+    chipY+=26;
+  };
+  if(p.drinkKind){
+    const D=DRINKS[p.drinkKind];
+    const left=Math.max(0,p.drinkMax-p.drinkT);
+    chip(D.color,'♥',(D.label+' '+left.toFixed(1)+'s').toUpperCase(),true);
+  }
+  if(p.strT>0) chip('#ff9a3d','✊',fmtTime(p.strT)+' STR',true);
+  if(p.spdT>0) chip('#7ee7ff','⚡',fmtTime(p.spdT)+' SWIFT',true);
+  /* unlocked abilities with cooldown readouts */
+  if(p.abilities.dash)    chip('#9ad1ff','➶',p.dashCd>0?p.dashCd.toFixed(1)+'s':'SHIFT');
+  if(p.abilities.whirl)   chip('#ffb36b','✹',p.whirlCd>0?p.whirlCd.toFixed(1)+'s':'F');
+  if(p.abilities.regenPlus) chip('#7ecba0','✚','MEND 15s');
+  if(p.abilities.pierce)  chip('#c9a0ff','⇒','PIERCE');
+  qy=Math.max(qy,chipY+14);
+
   // quest tracker
   const q=state.quest;
-  let qy=118;
   const qline=(txt,col)=>{
     ctx.fillStyle='rgba(10,12,18,0.6)'; roundRect(14,qy-13,240,20,6); ctx.fill();
     ctx.fillStyle=col; ctx.font='bold 11px system-ui'; ctx.textAlign='left';
@@ -74,12 +158,13 @@ function drawHUD(){
 
   // out-of-combat regeneration status
   if(p.hp<p.maxHp){
-    if(p.hurtT>=30){
+    const regenWait=p.abilities.regenPlus?15:30;
+    if(p.hurtT>=regenWait){
       ctx.fillStyle='rgba(10,26,14,0.7)'; roundRect(14,qy-13,240,20,6); ctx.fill();
       ctx.fillStyle='#7ee787'; ctx.font='bold 11px system-ui'; ctx.textAlign='left';
-      ctx.fillText('✚ Regenerating +1 HP/s',22,qy+1);
+      ctx.fillText('✚ Regenerating +'+(p.abilities.regenPlus?2:1)+' HP/s',22,qy+1);
     } else {
-      const left=Math.max(0,30-p.hurtT);
+      const left=Math.max(0,regenWait-p.hurtT);
       ctx.fillStyle='rgba(10,12,18,0.55)'; roundRect(14,qy-13,240,20,6); ctx.fill();
       ctx.fillStyle='#8b949e'; ctx.font='11px system-ui'; ctx.textAlign='left';
       ctx.fillText('✚ Regen in '+Math.ceil(left)+'s',22,qy+1);
@@ -98,16 +183,19 @@ function drawHUD(){
     ctx.fillText(BDEF[b.kind].name+(b.enraged?' — ENRAGED':''),VW/2,52);
   }
 
-  // minimap
+  // minimap (below the quickbar)
   if(minimap){
-    const s2=Math.min(138,VH*0.2), mx=VW-s2-16, my=16;
+    const s2=Math.min(138,VH*0.2), mx=VW-s2-16, my=74;
     ctx.fillStyle='rgba(10,12,18,0.75)'; roundRect(mx-5,my-5,s2+10,s2+10,8); ctx.fill();
     ctx.imageSmoothingEnabled=false;
     ctx.drawImage(minimap,mx,my,s2,s2);
     ctx.imageSmoothingEnabled=true;
     const sc=s2/(mapW*TS);
     const dot=(x,y,c,sz)=>{ ctx.fillStyle=c; ctx.fillRect(mx+x*sc-sz/2,my+y*sc-sz/2,sz,sz); };
-    if(state.floor===0) for(const n of npcs) dot(n.x,n.y,'#9ad1ff',3);
+    if(state.floor===0){
+      for(const n of npcs) dot(n.x,n.y,'#9ad1ff',3);
+      for(const a of state.biomeAltars) dot(a.x,a.y,a.done?'#6a6a72':'#ffe08a',4);
+    }
     for(const c2 of chests) if(!c2.opened) dot(c2.x,c2.y,'#ffd75e',2.5);
     for(const sh of shrines) dot(sh.x,sh.y, sh.done?'#5a5a62':sh.active?'#ff9a3d':'#7ee7ff',3);
     if(state.portal) dot(state.portal.x,state.portal.y,'#c46bff',4);
@@ -118,6 +206,8 @@ function drawHUD(){
     ctx.fillStyle='#c9d1d9'; ctx.font='10px system-ui'; ctx.textAlign='center';
     ctx.fillText(state.floor===0?'Surface — Emberfall':'Floor '+state.floor+' · '+FLNAMES[state.floor],mx+s2/2,my+s2+13);
   }
+
+  drawQuickbar();
 
   if(p.hurtFlash>0){
     ctx.fillStyle=`rgba(200,30,30,${p.hurtFlash*0.8})`;

@@ -50,6 +50,10 @@ function frame(now){
     const sx=s.x-cam.x, sy=s.y-cam.y;
     if(sx>-50&&sy>-50&&sx<VW+50&&sy<VH+50) drawables.push({y:s.y,fn:()=>drawShrineOne(s)});
   }
+  for(const a of state.biomeAltars){
+    const sx=a.x-cam.x, sy=a.y-cam.y;
+    if(sx>-80&&sy>-80&&sx<VW+80&&sy<VH+80) drawables.push({y:a.y,fn:()=>drawAltarOne(a)});
+  }
   if(state.portal) drawables.push({y:state.portal.y,fn:()=>drawPortalOne(state.portal)});
   for(const e of enemies){
     const sx=e.x-cam.x, sy=e.y-cam.y;
