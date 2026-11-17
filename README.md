@@ -11,13 +11,25 @@ install, no build, no assets — everything is generated in code.
 
 ## Features
 
-- Procedurally generated world: lake, beaches, forests, a village and a corrupted wasteland
-- Action combat: sword swings with knockback, arrows, hit flashes, screen shake
-- 3 enemy types + a boss (**the Ember Tyrant**) with telegraphed slam attacks and an enrage phase
-- Leveling (XP, +HP, +damage), gold, potions, gems, magnet-style loot pickup
-- Quest chain from Elder Maren, a trading post run by Finn (potions, blade, armor)
-- Minimap, quest tracker, boss health bar, floating damage numbers, particles
-- Synthesized sound effects and ambient music (Web Audio)
+- Procedural world (1000×1000) with **9 biomes**: Verdant Fields, Corruption, Cinder
+  Caldera, Ashen Wastes, Frostpeak Tundra, Golden Desert, Murk Swamp, Fungal Hollow,
+  Crimson Scar, Amber Savanna, Emerald Jungle, Rusted Badlands, Blossom Grove,
+  Mistwood — each with its own terrain texture, props (pines, cacti, palms, cherry
+  trees, crystals, mushrooms…), palette and monster table
+- **24 enemy types** across surface & dungeons: slimes, skeletons, wraiths, necromancers,
+  zombies, wolves, dire wolves, spiders, scorpions, yetis, sporecaps, imps, muck blobs,
+  bandits, lava hounds, shades, vultures, hornets, apes, sprites, wisps, emberites…
+  plus **mimics** — chest-monsters that ambush greedy looters (floor 2+)
+- 5 dungeon floors of **real rooms and arenas** (pillared halls, plazas, vaults,
+  boss arenas behind the Ember Seal) — no mazes
+- **Ray-traced lighting**: walls cast real shadows, colored torch/lava/shrine light,
+  line-of-sight checks — and sword swings can no longer cut through walls
+- Potions with **Minecraft-style timed effects**: Speed, Strength, Regeneration,
+  Fire Resistance (and Poison from monsters) with HUD timers
+- **Inventory**: 27-slot satchel (9×3) + Fortnite-style quick bar, keys `1`–`5`,
+  click-to-move stacks, `F` uses the selected item
+- 5 bosses, shrine trials, hidden relic vaults, elites, chests, minimap, quests,
+  synthesized audio
 
 ## Controls
 
@@ -26,8 +38,10 @@ install, no build, no assets — everything is generated in code.
 | `WASD` / arrows | move |
 | `Space` / left click | attack (click aims the swing) |
 | `E` | talk / interact / advance dialog |
-| `1–9` | pick dialog options |
-| `Q` | drink health potion |
+| `1–5` | select quick-bar slot (sword / bow / potions) |
+| `F` | use the selected quick-bar item |
+| `Q` | quick-drink a health potion |
+| `I` | open the inventory (click to move stacks) |
 | `P` / `M` | pause / mute |
 
 ## C version (native, raylib)

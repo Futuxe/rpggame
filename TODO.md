@@ -1,4 +1,21 @@
-# TODO — Resume Emberfall v2
+# TODO — Emberfall v3
+
+## SHIPPED v3 (this session)
+- ✅ 9 new surface biomes (14 total zones): snow, desert, swamp, fungal, crimson, ash,
+  savanna, jungle, badlands, cherry, volcanic, mistwood — climate field (temp/moisture)
+  drives biome layout; per-biome textures, trees (pine/cactus/acacia/palm/cherry/mist/
+  crystal/mush/dead/burnt), rocks & surface spawn tables
+- ✅ 17 new enemies (zombie, wolf, dire wolf, spider, scorpion, yeti, sporecap, imp,
+  muck blob, bandit, lava hound, shade, mimic, boar, vulture, leech, hornet, ape,
+  sprite, frostwisp, wisp, emberite) with new AI: lunges, zigzag, blink-stalks,
+  slams, sleep-ambush mimics, generic ranged casters (fire/frost/spore)
+- ✅ Sword swings now require line of sight — no more killing through walls
+- ✅ Minecraft-style timed potion effects (speed/strength/regen/fire-resist/poison)
+  with HUD timers; poison ticks, fire-resist blocks lava
+- ✅ Inventory: 27-slot satchel + 5-slot quick bar (keys 1–5), click-to-move stacks,
+  F uses selected item; potions are now item stacks of 5 kinds
+- ✅ Tested headless in Chromium: world gen, all 5 floors, biome tour, potion FX — 0 errors
+
 
 > **Note to future session (opencode):** the user asked you to FINISH THIS when they are home.
 > Read this file fully, then continue exactly where things stopped. Repo: `git@github.com:Futuxe/rpggame.git`
