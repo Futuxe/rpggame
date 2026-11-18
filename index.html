@@ -116,9 +116,10 @@ function musicTick(dt){
 const TS=32;
 const T_WATER=0, T_SAND=1, T_GRASS=2, T_CORRUPT=3, T_WALL=4, T_FLOOR=5, T_LAVA=6, T_STAIRSDOWN=7, T_STAIRSUP=8, T_SECRET=9,
       T_SNOW=10, T_DESERT=11, T_SWAMP=12, T_MUSH=13, T_CRIMSON=14, T_ASH=15,
-      T_SAVANNA=16, T_JUNGLE=17, T_BADLANDS=18, T_CHERRY=19, T_VOLCANIC=20, T_MISTWOOD=21;
-const SOLID = t => t===T_WATER || t===T_WALL || t===T_SECRET;
-const MAXFLOOR=5;
+      T_SAVANNA=16, T_JUNGLE=17, T_BADLANDS=18, T_CHERRY=19, T_VOLCANIC=20, T_MISTWOOD=21,
+      T_SWITCH=22, T_DOOR=23;
+const SOLID = t => t===T_WATER || t===T_WALL || t===T_SECRET || t===T_DOOR;
+const MAXFLOOR=8;   // five original depths plus three more sealed floors below
 const BIOME_NAME={
   [T_GRASS]:'Verdant Fields', [T_CORRUPT]:'The Corruption', [T_SNOW]:'Frostpeak Tundra',
   [T_DESERT]:'Golden Desert', [T_SWAMP]:'The Murk Swamp', [T_MUSH]:'Fungal Hollow',
@@ -142,13 +143,13 @@ const BIOME_SPAWNS={
   [T_VOLCANIC]:['emberite','imp','hound','emberite','scorpion'],
   [T_MISTWOOD]:['wisp','wisp','shade','spider','zombie','bandit'],
 };
-const FLNAMES={1:'The Bone Hollows',2:'The Molten Gaol',3:'The Wailing Crypt',4:'The Ashen Deep',5:'The Ember Throne'};
-const FLOORBOSS={1:'boneking',2:'cindergolem',3:'malachar',4:'pyrelord',5:'tyrant'};
-let mapW=1000, mapH=1000;
-let tiles=null, tileVar=null;
-const VILLAGE={x:500,y:500,r:13};
-const CORRUPT={x:680,y:700,r:60};
-let trees=[], treeGrid=new Map(), rocks=[], flowers=[], torches=[], chests=[], buildings=[], props=[], shrines=[], lavas=[];
+const FLNAMES={1:'The Bone Hollows',2:'The Molten Gaol',3:'The Wailing Crypt',4:'The Ashen Deep',5:'The Ember Throne',6:'The Sunken Sanctum',7:'The Glass Foundry',8:'The Core Forge'};
+const FLOORBOSS={1:'boneking',2:'cindergolem',3:'malachar',4:'pyrelord',5:'tyrant',6:'drownedking',7:'shardlord',8:'coregolem'};
+let mapW=2000, mapH=2000;
+let tiles=null, tileVar=null, tempCat=null;   // 0=cold,1=temperate,2=hot — keeps cold biomes off warm ones
+const VILLAGE={x:1000,y:1000,r:16};
+const CORRUPT={x:1360,y:1400,r:80};
+let trees=[], treeGrid=new Map(), rocks=[], flowers=[], torches=[], chests=[], buildings=[], props=[], shrines=[], lavas=[], switches=[];
 let entrance=null, returnPortal=null;
 
 function tileAt(tx,ty){ return (tx<0||ty<0||tx>=mapW||ty>=mapH)?T_WALL:tiles[ty*mapW+tx]; }
@@ -172,7 +173,8 @@ function genSurface(){
   mapW=1000; mapH=1000;
   tiles=new Uint8Array(mapW*mapH);
   tileVar=new Float32Array(mapW*mapH);
-  trees=[]; treeGrid=new Map(); rocks=[]; flowers=[]; torches=[]; chests=[]; buildings=[]; props=[]; shrines=[]; lavas=[]; returnPortal=null;
+  tempCat=new Uint8Array(mapW*mapH);
+  trees=[]; treeGrid=new Map(); rocks=[]; flowers=[]; torches=[]; chests=[]; buildings=[]; props=[]; shrines=[]; lavas=[]; switches=[]; returnPortal=null;
   // coarse height field (half resolution) keeps a million-tile map fast to build
   const hw=(mapW>>1)+2, hh=(mapH>>1)+2;
   const hmap=new Float32Array(hw*hh);
@@ -202,19 +204,61 @@ function genSurface(){
         const tmp=tempOf(x,y), moi=moistOf(x,y);
         const patch=vnoise(x*0.028+77.7, y*0.028+33.3);
         if(dist(x,y,VILLAGE.x,VILLAGE.y) < VILLAGE.r+12) t=T_GRASS;  // Emberfall village always stands on open plains
-        else if(tmp<0.355) t = patch>0.72 ? T_CHERRY : T_SNOW;  // sheltered blossom valleys in the cold
-        else if(tmp>0.70 && moi<0.34) t=T_BADLANDS;
-        else if(tmp>0.66) t = moi<0.52 ? T_DESERT : T_CRIMSON;
-        else if(moi>0.70) t=T_JUNGLE;
-        else if(moi>0.665) t=T_SWAMP;
-        else if(moi>0.585) t=T_MUSH;
-        else if(tmp<0.44 && moi>0.50) t=T_MISTWOOD;
-        else if(tmp>0.52 && moi<0.42) t=T_SAVANNA;
-        else if(patch>0.80 && hash2(x*1.9,y*2.3)>0.45) t=T_CHERRY; // rare blossom pockets
+        else {
+          // Minecraft-style temperature bands: cold never borders warm.
+          // 0=cold (<0.40), 1=temperate (0.40-0.68), 2=hot (>0.68)
+          const cat = tmp<0.40 ? 0 : tmp>0.68 ? 2 : 1;
+          tempCat[i]=cat;
+          if(cat===0) t = moi>0.50 ? T_MISTWOOD : (patch>0.70 ? T_CHERRY : T_SNOW);
+          else if(cat===2){
+            if(moi<0.34) t=T_BADLANDS;
+            else if(moi<0.52) t=T_DESERT;
+            else if(moi>0.72) t=T_JUNGLE;
+            else t=T_CRIMSON;
+          } else {
+            if(moi>0.70) t=T_JUNGLE;
+            else if(moi>0.665) t=T_SWAMP;
+            else if(moi>0.585) t=T_MUSH;
+            else if(tmp>0.52 && moi<0.42) t=T_SAVANNA;
+            else t=T_GRASS;
+          }
+        }
       }
     }
     tiles[i]=t;
     tileVar[i]=hash2(x*3.3,y*7.7);
+  }
+  // temperature-border smoothing: never let a cold tile sit directly beside a hot one
+  // (single-tile pockets get nudged toward their neighbours' climate)
+  for(let y=1;y<mapH-1;y++)for(let x=1;x<mapW-1;x++){
+    const i=y*mapW+x; let t=tiles[i];
+    if(t===T_WATER||t===T_LAVA||t===T_CORRUPT||t===T_STAIRSDOWN) continue;
+    const c=tempCat[i];
+    let n0=0,n1=0,n2=0;
+    // read neighbours' cats directly
+    const iL=(y)*mapW+(x-1), iR=(y)*mapW+(x+1), iU=(y-1)*mapW+x, iD=(y+1)*mapW+x;
+    n0+=(tempCat[iL]===0)+(tempCat[iR]===0)+(tempCat[iU]===0)+(tempCat[iD]===0);
+    n1+=(tempCat[iL]===1)+(tempCat[iR]===1)+(tempCat[iU]===1)+(tempCat[iD]===1);
+    n2+=(tempCat[iL]===2)+(tempCat[iR]===2)+(tempCat[iU]===2)+(tempCat[iD]===2);
+    let maj=c; if(n0>=n1&&n0>=n2)maj=0; else if(n1>=n0&&n1>=n2)maj=1; else if(n2>n0&&n2>n1)maj=2;
+    if(maj!==c && (c===0||maj===0) && (c===2||maj===2)){
+      // cold↔hot boundary: re-roll this tile into the majority climate band
+      const moi=moistOf(x,y), patch=vnoise(x*0.028+77.7, y*0.028+33.3);
+      if(maj===0) t = moi>0.50 ? T_MISTWOOD : (patch>0.70 ? T_CHERRY : T_SNOW);
+      else if(maj===2){
+        if(moi<0.34) t=T_BADLANDS;
+        else if(moi<0.52) t=T_DESERT;
+        else if(moi>0.72) t=T_JUNGLE;
+        else t=T_CRIMSON;
+      } else {
+        if(moi>0.70) t=T_JUNGLE;
+        else if(moi>0.665) t=T_SWAMP;
+        else if(moi>0.585) t=T_MUSH;
+        else if(tmp>0.52 && moi<0.42) t=T_SAVANNA;
+        else t=T_GRASS;
+      }
+      tiles[i]=t; tempCat[i]=maj;
+    }
   }
   for(let y=0;y<mapH;y++)for(let x=0;x<mapW;x++){
     const i=y*mapW+x;
@@ -388,7 +432,7 @@ function genDungeon(fl){
   mapW=160+fl*40; mapH=160+fl*40;
   tiles=new Uint8Array(mapW*mapH); tiles.fill(T_WALL);
   tileVar=new Float32Array(mapW*mapH);
-  trees=[]; treeGrid=new Map(); rocks=[]; flowers=[]; torches=[]; chests=[]; buildings=[]; props=[]; shrines=[]; lavas=[]; entrance=null; returnPortal=null;
+  trees=[]; treeGrid=new Map(); rocks=[]; flowers=[]; torches=[]; chests=[]; buildings=[]; props=[]; shrines=[]; lavas=[]; switches=[]; entrance=null; returnPortal=null;
   const rooms=[];
   const overlap=(x,y,w,h)=>{
     for(const r of rooms)
@@ -554,6 +598,38 @@ function genDungeon(fl){
     chests.push({x:r.cx*TS+TS/2+rnd(-22,22), y:r.cy*TS+TS/2+rnd(-14,14),
       opened:!!(state.openedChests&&state.openedChests.has(id)), id});
   }
+  /* --- switches + locked doors (pressure-plate puzzles) ---
+     A pressure plate in a room opens a door to a small treasure alcove. --- */
+  const switchRooms = rooms.slice(1).filter(r=>r!==bossRoom && r!==downRoom);
+  const nSwitch = fl>=2 ? 2 : 1;
+  for(let si=0; si<nSwitch && switchRooms.length; si++){
+    const idx=(Math.random()*switchRooms.length)|0;
+    const r=switchRooms.splice(idx,1)[0];
+    // carve a 1-tile-wide alcove off a random wall of the room
+    const side=(Math.random()*4)|0; // 0=N,1=E,2=S,3=W
+    let ax,ay,dw,dh;
+    if(side===0){ ax=r.x+((Math.random()*(r.w-2))|0)+1; ay=r.y; dw=1; dh=2; }
+    else if(side===1){ ax=r.x+r.w-1; ay=r.y+((Math.random()*(r.h-2))|0)+1; dw=2; dh=1; }
+    else if(side===2){ ax=r.x+((Math.random()*(r.w-2))|0)+1; ay=r.y+r.h-1; dw=1; dh=2; }
+    else { ax=r.x; ay=r.y+((Math.random()*(r.h-2))|0)+1; dw=2; dh=1; }
+    // the outer tile of the alcove becomes a door, inner tile holds the chest
+    const doorX=ax+(side===0?0:side===1?dw-1:side===2?0:-1);
+    const doorY=ay+(side===0?dh-1:side===1?0:side===2?dh-1:0);
+    const innerX=ax+(side===0?0:side===1?0:side===2?0:1);
+    const innerY=ay+(side===0?0:side===1?1:side===2?0:0);
+    // carve the alcove floor
+    for(let dy=0;dy<dh;dy++)for(let dx=0;dx<dw;dx++) setTile(ax+dx,ay+dy,T_FLOOR);
+    setTile(doorX,doorY,T_DOOR);
+    const id='s'+fl+':'+doorX+','+doorY;
+    chests.push({x:innerX*TS+TS/2, y:innerY*TS+TS/2, opened:false, id, vault:false, switchLocked:true});
+    // place the pressure plate on a floor tile inside the room
+    let sx=-1,sy2=-1;
+    for(let t=0;t<50;t++){
+      const px=r.x+1+((Math.random()*(r.w-2))|0), py=r.y+1+((Math.random()*(r.h-2))|0);
+      if(tileAt(px,py)===T_FLOOR){ sx=px; sy2=py; break; }
+    }
+    if(sx>=0){ setTile(sx,sy2,T_SWITCH); switches.push({x:sx,y:sy2,doorX,doorY,id,active:false,used:false}); }
+  }
   /* --- torches on walls that face open floor --- */
   for(let ty=1;ty<mapH-1;ty++)for(let tx=1;tx<mapW-1;tx++){
     if(tileAt(tx,ty)!==T_WALL) continue;
@@ -642,7 +718,7 @@ function findFreeSpot(x,y,r=12){
 /* ---------------- game state ---------------- */
 const state={
   mode:'title', // title | play | dead | victory
-  time:0, floor:0, paused:false, dbg:false, inv:false,
+  time:0, timeOfDay:0.28, floor:0, paused:false, dbg:false, inv:false,
   shakeT:0, shakeMag:0, spawnT:0,
   boss:null, bossesDead:{}, biomeDead:{}, biomeAltars:[], portal:null, trans:null, dialog:null, cine:null,
   quest:{id:'q1', state:'none', prog:0},
@@ -1243,6 +1319,10 @@ const BDEF={
   malachar:   {name:'MALACHAR THE NECRO LORD',hp:640,  spd:58, dmg:16, r:20, xp:420, enrage:0.40},
   pyrelord:   {name:'PYRELORD VEX',          hp:780,  spd:74, dmg:20, r:22, xp:520, enrage:0.45},
   tyrant:     {name:'THE EMBER TYRANT',      hp:1150, spd:56, dmg:26, r:28, xp:700, enrage:0.50},
+  /* deeper floors */
+  drownedking:{name:'THE DROWNED KING',      hp:900,  spd:48, dmg:22, r:24, xp:560, enrage:0.40},
+  shardlord:  {name:'SHARDLORD VAEL',        hp:820,  spd:70, dmg:24, r:20, xp:600, enrage:0.45},
+  coregolem:  {name:'THE CORE GOLEM',        hp:1300, spd:38, dmg:30, r:30, xp:760, enrage:0.50},
   /* hidden-biome guardians: slain at their altars for a permanent ability */
   frostmaw:   {name:'FROSTMAW, THE RIME TYRANT', hp:480, spd:52, dmg:19, r:26, xp:300, enrage:0.42},
   bogqueen:   {name:'THE BOG QUEEN',             hp:430, spd:58, dmg:15, r:22, xp:290, enrage:0.40},
@@ -1324,9 +1404,21 @@ function bossReward(kind){
     addText(player.x,player.y-30,'+12 speed — Ash Striders','#ffb36b',2.5,true);
     readyIf('q5');
   } else if(kind==='tyrant'){
+    player.maxHp+=25; player.hp+=25;
+    addText(player.x,player.y-30,'+25 max HP — Ember Heart','#ff8a5e',3,true);
+    readyIf('q6');
+  } else if(kind==='drownedking'){
+    player.armor+=2;
+    addText(player.x,player.y-30,'+2 Armor — Tide Plate','#7ee7ff',2.5,true);
+    readyIf('q7');
+  } else if(kind==='shardlord'){
+    player.dmg+=4;
+    addText(player.x,player.y-30,'+4 damage — Shard Edge','#c46bff',2.5,true);
+    readyIf('q8');
+  } else if(kind==='coregolem'){
     state.portal={x:state.dbossRoom.cx*TS+TS/2, y:state.dbossRoom.cy*TS+TS/2};
     state.won=true;
-    readyIf('q6');
+    readyIf('q9');
     sfx('quest');
     state.mode='victory';
   }
@@ -1530,6 +1622,71 @@ function updateBoss(b,dt){
           for(let i=0;i<14;i++) eBolt(b.x,b.y,i/14*TAU,190,b.dmg*0.7,'fire',1.4);
         }
       }
+      break;
+    case 'drownedking': // slow tide surge + summoning drowned minions
+      if(b.dashT>0){
+        b.dashT-=dt;
+        moveEntity(b,Math.cos(b.dashA)*340*dt,Math.sin(b.dashA)*340*dt);
+        burst(b.x,b.y,'#7ee7ff',3,60,0.4,3);
+        if(dp<b.r+p.r+6 && b.atkCd<=0){ b.atkCd=0.9; hurtPlayer(b.dmg*1.25,b.x,b.y); }
+      } else if(b.cd.dash<=0 && dp<470){
+        b.cd.dash=b.enraged?3:4.2; b.telegraph=0.75; b.teleA=ang; b.dashT=0; // set via telegraph below
+        addText(b.x,b.y-46,'!','#7ee7ff',0.8,true);
+      }
+      if(b.telegraph>0 && b.dashT<=0){
+        b.telegraph-=dt;
+        if(b.telegraph<=0){ b.dashT=0.42; b.dashA=b.teleA; sfx('dash'); }
+      }
+      if(b.cd.summon<=0){
+        b.cd.summon=b.enraged?5:7;
+        if(enemies.filter(x=>x.minion).length<4){
+          const n=b.enraged?3:2;
+          for(let i=0;i<n;i++){
+            const s=findFreeSpot(b.x+rnd(-60,60),b.y+rnd(-60,60),12);
+            makeEnemy(pick(['dslime','skeleton']),s.x,s.y,{minion:true});
+          }
+          sfx('summon'); burst(b.x,b.y,'#7ee7ff',14,90,0.6,3);
+        }
+      }
+      chase();
+      break;
+    case 'shardlord': // fast glass-shard volley and teleport dashes
+      if(b.dashT>0){
+        b.dashT-=dt;
+        moveEntity(b,Math.cos(b.dashA)*480*dt,Math.sin(b.dashA)*480*dt);
+        burst(b.x,b.y,'#c46bff',3,60,0.4,3);
+      } else if(b.cd.dash<=0 && dp<420){
+        b.cd.dash=b.enraged?2.4:3.4; b.telegraph=0.6; b.teleA=ang;
+        addText(b.x,b.y-46,'!','#c46bff',0.8,true);
+      }
+      if(b.telegraph>0 && b.dashT<=0){
+        b.telegraph-=dt;
+        if(b.telegraph<=0){ b.dashT=0.3; b.dashA=b.teleA; sfx('dash'); }
+      }
+      if(b.cd.volley<=0 && dp<560){
+        b.cd.volley=b.enraged?1.7:2.4;
+        const n=b.enraged?10:6;
+        for(let i=0;i<n;i++) eBolt(b.x,b.y,ang+(i-(n-1)/2)*0.16,290,b.dmg*0.6,'void',1.7);
+        sfx('arrow');
+      }
+      if(b.cd.blink<=0 && dp<130){
+        b.cd.blink=6; sfx('blink');
+        burst(b.x,b.y,'#c46bff',16,120,0.5,3);
+        const ba=rnd(TAU), rr=rnd(150,260);
+        const s=findFreeSpot(b.x+Math.cos(ba)*rr,b.y+Math.sin(ba)*rr,b.r);
+        b.x=s.x; b.y=s.y;
+        burst(b.x,b.y,'#c46bff',16,120,0.5,3);
+      }
+      chase();
+      break;
+    case 'coregolem': // slow heavy slams + a spreading nova of magma bolts
+      if(b.cd.slam<=0 && dp<360){ b.cd.slam=99; b.telegraph=1.0; b.telegraphR=190; addText(b.x,b.y-50,'!','#ff8a5e',0.9,true); }
+      if(b.cd.rock<=0 && dp<560){ b.cd.rock=b.enraged?2.2:3.2; eBolt(b.x,b.y,ang,160,b.dmg*1.2,'rock',2.8); sfx('rock'); }
+      if(b.enraged && b.cd.nova<=0){
+        b.cd.nova=8; sfx('nova');
+        for(let i=0;i<16;i++) eBolt(b.x,b.y,i/16*TAU,170,b.dmg*0.7,'fire',1.5);
+      }
+      chase();
       break;
   }
   if(dp<b.r+p.r+4 && b.atkCd<=0){ b.atkCd=1.1; hurtPlayer(b.dmg,b.x,b.y); }
@@ -1961,6 +2118,8 @@ function updateCam(dt){
 function update(dt){
   state.time+=dt;
   musicTick(dt);
+  // day/night cycle on the overworld (a full day ~ 10 minutes)
+  state.timeOfDay=(state.timeOfDay+dt/600)%1;
   if(state.shakeT>0) state.shakeT-=dt;
 
   // particles / texts always animate
@@ -2032,6 +2191,13 @@ function update(dt){
   // lava burns (Fire Resistance potion prevents it)
   if(tileAtPx(p.x,p.y)===T_LAVA && p.invulnT<=0 && !fxActive('fire'))
     hurtPlayer(8,p.x+rnd(-1,1),p.y+rnd(-1,1));
+  // pressure plates: step on a switch to open its linked door
+  const st=tileAtPx(p.x,p.y);
+  if(st===T_SWITCH){
+    const sw=switches.find(s=>s.x===Math.floor(p.x/TS)&&s.y===Math.floor(p.y/TS)&&!s.used);
+    if(sw){ sw.used=true; sw.active=true; setTile(sw.doorX,sw.doorY,T_FLOOR);
+      sfx('quest'); addText(p.x,p.y-26,'Door opened!','#7ee787',2,true); }
+  }
   // out-of-combat regeneration: 30s idle (15s with Deep Mend), then +1 hp/s (+2 with Deep Mend)
   p.hurtT+=dt;
   const regenWait=p.abilities.regenPlus?15:30;
@@ -3505,51 +3671,43 @@ function drawPortalOne(po){
   }
 }
 
+/* ---------------- pixel-art hero ----------------
+   Hand-placed 24x24 pixel sprite (facing right, flipped when moving left),
+   painted onto an offscreen canvas at load time. No external assets.           */
+let PLAYER_TEX=null;
+const PX_W=24, PX_H=24, PX_SCALE=2;   // 24x24 tex drawn at 48x48 for a readable hero
+function makePlayerTex(){
+  const cv=document.createElement('canvas'); cv.width=PX_W; cv.height=PX_H;
+  const g=cv.getContext('2d'); g.imageSmoothingEnabled=false;
+  const C={' ':null,'.':'#ffffff','s':'#f0c49a','S':'#e0b88a','h':'#5a3a1e','H':'#3e2512','e':'#222222','t':'#4a80e8','T':'#2c56a8','b':'#5a3a22','B':'#ffd75e','l':'#3a2a1c','L':'#221a12','c':'#a33b3b','C':'#7a2525','w':'#c8a44a','W':'#a88a32'};
+  const ROWS=['                        ','     HHHH               ','    hhhhH               ','   hhHHHh               ','  hHSeesHh              ','   hHHHHh               ','    HHHH                ','    cccccc              ','   cTTTTTTcc            ','   cTTttTTcc            ','   cTTBBTTcc            ','   cTTBBTTcc            ','   cTTTTTTcc            ','    cccc                ','     llll               ','     llll               ','    ll  ll              ','    ll  ll              ','                        ','                        ','                        ','                        ','       wwwww            ','       W    w           '];
+  for(let y=0;y<ROWS.length;y++)for(let x=0;x<ROWS[y].length;x++){const col=C[ROWS[y][x]];if(!col)continue;g.fillStyle=col;g.fillRect(x,y,1,1);}
+  return cv;
+}
+function drawSlash(sx,sy,prog,dir){
+  const a0=dir-1.5, a1=dir+1.0, a=lerp(a0,a1,prog);
+  ctx.strokeStyle='rgba(255,255,255,0.8)'; ctx.lineWidth=4; ctx.lineCap='round';
+  ctx.beginPath(); ctx.arc(sx,sy,42,a0,a); ctx.stroke();
+  ctx.strokeStyle='rgba(255,215,94,0.9)'; ctx.lineWidth=2;
+  ctx.beginPath(); ctx.moveTo(sx+Math.cos(a)*22,sy+Math.sin(a)*22); ctx.lineTo(sx+Math.cos(a)*44,sy+Math.sin(a)*44); ctx.stroke();
+}
 function drawPlayer(){
   const p=player;
   const sx=p.x-cam.x, sy=p.y-cam.y;
   const bob=p.moving?Math.sin(p.walkT)*1.6:Math.sin(state.time*2.2)*0.8;
   const blink = p.invulnT>0 && (Math.floor(state.time*14)%2===0);
   if(blink && state.mode==='play') return;
-  shadowEllipse(sx,sy+9,10,4.5);
-  /* cape billows behind the hero */
-  const ca=Math.atan2(-(p.face.y||0.2),-(p.face.x||1));
-  const capeSw=p.moving?Math.sin(p.walkT)*2.2:Math.sin(state.time*1.8)*0.8;
-  ctx.fillStyle='#8f2f3f';
-  ctx.beginPath();
-  ctx.moveTo(sx-6,sy-9+bob);
-  ctx.quadraticCurveTo(sx+Math.cos(ca)*9+capeSw,sy+2+bob,sx+Math.cos(ca)*7+capeSw*1.3,sy+9+bob);
-  ctx.quadraticCurveTo(sx+Math.cos(ca)*2,sy+7+bob,sx+6,sy-6+bob);
-  ctx.closePath(); ctx.fill();
-  /* tunic with top-down shading + outline */
-  const tg=ctx.createLinearGradient(sx,sy-9+bob,sx,sy+10+bob);
-  tg.addColorStop(0,'#4a80e8'); tg.addColorStop(1,'#2c56a8');
-  ctx.fillStyle=tg;
-  roundRect(sx-8,sy-8+bob,16,18,5); ctx.fill();
-  ctx.strokeStyle='rgba(10,16,40,0.55)'; ctx.lineWidth=1.5;
-  roundRect(sx-8,sy-8+bob,16,18,5); ctx.stroke();
-  ctx.fillStyle='rgba(0,0,30,0.28)';
-  roundRect(sx-8,sy+4+bob,16,6,4); ctx.fill();
-  /* belt + buckle */
-  ctx.fillStyle='#5a3a22'; ctx.fillRect(sx-8,sy+1+bob,16,3);
-  ctx.fillStyle='#ffd75e'; ctx.fillRect(sx-2,sy+1+bob,4,3);
-  /* boots take little steps */
-  const step=p.moving?Math.sin(p.walkT)*2.4:0;
-  ctx.fillStyle='#3a2a1c';
-  roundRect(sx-7,sy+8+bob+Math.max(0,step),6,4,2); ctx.fill();
-  roundRect(sx+1,sy+8+bob+Math.max(0,-step),6,4,2); ctx.fill();
-  /* head with skin shading + hair + sheen */
-  const hg=ctx.createLinearGradient(sx-7,sy-20+bob,sx+7,sy-6+bob);
-  hg.addColorStop(0,'#ffd8b0'); hg.addColorStop(1,'#e0a878');
-  ctx.fillStyle=hg;
-  ctx.beginPath(); ctx.arc(sx,sy-13+bob,7,0,TAU); ctx.fill();
-  ctx.fillStyle='#7a4a1e';
-  ctx.beginPath(); ctx.arc(sx,sy-15+bob,7,Math.PI,TAU); ctx.fill();
-  ctx.fillStyle='rgba(255,255,255,0.22)';
-  ctx.beginPath(); ctx.arc(sx-2.5,sy-16+bob,2.2,0,TAU); ctx.fill();
-  ctx.fillStyle='#222';
-  const ex=p.face.x*2, ey=p.face.y*1.4;
-  ctx.beginPath(); ctx.arc(sx-2.5+ex,sy-12+bob+ey,1.3,0,TAU); ctx.arc(sx+2.5+ex,sy-12+bob+ey,1.3,0,TAU); ctx.fill();
+  if(!PLAYER_TEX) PLAYER_TEX=makePlayerTex();
+  const flip = p.face.x<0;
+  const sw=PX_W*PX_SCALE, sh=PX_H*PX_SCALE;
+  ctx.save();
+  ctx.translate(sx-sw/2+2, sy-sh/2-6+bob);
+  ctx.scale(flip?-1:1, 1);
+  if(flip) ctx.translate(-sw, 0);
+  ctx.imageSmoothingEnabled=false;
+  ctx.drawImage(PLAYER_TEX,0,0,PX_W,PX_H,0,0,sw,sh);
+  ctx.imageSmoothingEnabled=true;
+  ctx.restore();
   if(p.weapon==='bow' && p.bow){
     /* the hero holds the warden bow: limbs, string and a drawn arrow */
     const fa=(p.face.x||p.face.y)?Math.atan2(p.face.y,p.face.x):0;
@@ -4285,7 +4443,7 @@ function drawBoss(){
     ctx.strokeStyle=`rgba(255,150,60,${0.3+gl*0.3})`; ctx.lineWidth=1.2;
     ctx.beginPath(); ctx.moveTo(sx,sy-b.r*0.15); ctx.lineTo(sx+8,sy-14); ctx.lineTo(sx-6,sy-22); ctx.stroke();
     if(Math.random()<0.4) parts.push({x:b.x+rnd(-16,16),y:b.y+rnd(-4,10),vx:rnd(-10,10),vy:rnd(-60,-26),life:rnd(0.3,0.6),max:0.6,color:'#ff9a3d',size:2.2,grav:-20});
-  } else { // tyrant
+  } else if(b.kind==='tyrant'){
     const sq=1+Math.sin(b.phase)*0.08;
     const gr=ctx.createRadialGradient(sx,sy,5,sx,sy,b.r*2.2);
     gr.addColorStop(0,'rgba(255,110,40,0.35)'); gr.addColorStop(1,'rgba(255,110,40,0)');
@@ -4306,6 +4464,47 @@ function drawBoss(){
       ctx.fillStyle=`rgba(255,${120+fl*100|0},50,${0.5+fl*0.5})`;
       ctx.beginPath(); ctx.arc(sx+i*9,sy-b.r*sq-5-fl*6,2.8,0,TAU); ctx.fill();
     }
+  } else if(b.kind==='drownedking'){
+    const bob=Math.sin(b.phase*0.6)*3;
+    ctx.fillStyle=flash?'#fff':'#2c4a5a';
+    ctx.beginPath(); ctx.ellipse(sx,sy+bob,b.r,b.r*0.9,0,0,TAU); ctx.fill();
+    ctx.fillStyle='#4a6a7a';
+    ctx.beginPath(); ctx.arc(sx,sy-b.r*0.45+bob,b.r*0.55,0,0,TAU); ctx.fill();
+    ctx.fillStyle='#7ee7ff';
+    for(let i=-1;i<=1;i++){
+      ctx.beginPath(); ctx.arc(sx+i*9,sy-12+bob,2+Math.sin(t*3+i)*1,0,TAU); ctx.fill();
+    }
+    ctx.strokeStyle='#a8d8ff'; ctx.lineWidth=2;
+    for(let i=-1;i<=1;i++){
+      ctx.beginPath(); ctx.arc(sx+i*10,sy+10+bob,1.4+Math.sin(t*4+i)*0.8,0,TAU); ctx.stroke();
+    }
+  } else if(b.kind==='shardlord'){
+    const gl2=0.5+0.5*Math.sin(b.phase);
+    ctx.fillStyle=flash?'#fff':'#3a2a58';
+    ctx.beginPath(); ctx.moveTo(sx,sy-b.r); ctx.lineTo(sx+b.r*0.5,sy-4); ctx.lineTo(sx,sy+b.r*0.5); ctx.lineTo(sx-b.r*0.5,sy-4); ctx.closePath(); ctx.fill();
+    ctx.fillStyle='#c46bff';
+    ctx.beginPath(); ctx.arc(sx,sy-6,4+gl2*1.5,0,TAU); ctx.fill();
+    ctx.fillStyle='rgba(196,107,255,0.35)';
+    ctx.beginPath(); ctx.arc(sx,sy,b.r*1.5,0,TAU); ctx.fill();
+    ctx.strokeStyle='#c46bff'; ctx.lineWidth=1.5;
+    for(let i=0;i<4;i++){
+      const a=i/4*TAU+t*2;
+      ctx.beginPath(); ctx.moveTo(sx+Math.cos(a)*b.r*0.6,sy+Math.sin(a)*b.r*0.6); ctx.lineTo(sx+Math.cos(a)*b.r*1.3,sy+Math.sin(a)*b.r*1.3); ctx.stroke();
+    }
+  } else if(b.kind==='coregolem'){
+    const sq=1+Math.sin(b.phase*0.6)*0.07;
+    ctx.fillStyle=flash?'#fff':'#4d4540';
+    ctx.beginPath(); ctx.ellipse(sx,sy,b.r*sq,b.r*0.85/sq,0,0,TAU); ctx.fill();
+    ctx.fillStyle='#3a2f2a';
+    ctx.beginPath(); ctx.arc(sx,sy-b.r*0.35,b.r*0.5,0,0,TAU); ctx.fill();
+    ctx.fillStyle='#ff7b3d';
+    for(let i=-1;i<=1;i++){
+      ctx.beginPath(); ctx.moveTo(sx+i*b.r*0.45,sy-b.r*0.5); ctx.lineTo(sx+i*b.r*0.45,sy-b.r*1.1); ctx.lineTo(sx+i*b.r*0.45+4,sy-b.r*0.5); ctx.closePath(); ctx.fill();
+    }
+    ctx.fillStyle='rgba(255,110,40,0.35)';
+    ctx.beginPath(); ctx.arc(sx,sy,b.r*1.7,0,TAU); ctx.fill();
+    ctx.strokeStyle='#ff7b3d'; ctx.lineWidth=2.5;
+    ctx.beginPath(); ctx.arc(sx,sy,b.r*0.9,0,TAU); ctx.stroke();
   }
 }
 function drawArrows(){
@@ -4470,7 +4669,11 @@ function drawDarkness(){
   const surface=state.floor===0;
   if(lightCvs.width!==VW||lightCvs.height!==VH){ lightCvs.width=VW; lightCvs.height=VH; }
   lightCtx.clearRect(0,0,VW,VH);
-  lightCtx.fillStyle=surface?'rgba(10,13,26,0.42)':THEMES[state.floor].fog;
+  if(surface){
+    const night=Math.max(0,Math.cos(state.timeOfDay*Math.PI*2));  // 1 at midnight, 0 at noon
+    const r=lerp(10,3,night), g2=lerp(13,4,night), b=lerp(26,9,night), a=lerp(0.42,0.78,night);
+    lightCtx.fillStyle=`rgba(${r},${g2},${b},${a})`;
+  } else lightCtx.fillStyle=THEMES[state.floor].fog;
   lightCtx.fillRect(0,0,VW,VH);
   lightCtx.globalCompositeOperation='destination-out';
   const t=state.time;
@@ -5101,14 +5304,49 @@ function frame(now){
   ctx.save();
   ctx.translate(ox,oy);
 
-  ctx.fillStyle = state.floor===0 ? '#1a3a52' : THEMES[state.floor].bg;
-  ctx.fillRect(-30,-30,VW+60,VH+60);
+  if(state.floor===0){
+    const tod=state.timeOfDay;
+    const night=Math.max(0,Math.cos(tod*Math.PI*2));
+    const sg=ctx.createLinearGradient(0,0,0,VH);
+    sg.addColorStop(0, night?'#060614':'#5aa2e8');
+    sg.addColorStop(1, night?'#141028':'#cfeffd');
+    ctx.fillStyle=sg; ctx.fillRect(-30,-30,VW+60,VH+60);
+    const ang=(tod-0.25)*Math.PI, R=Math.max(VW,VH)*0.85, hy=VH*0.62;
+    const cx=VW/2-Math.cos(ang)*R, cy=hy-Math.sin(ang)*R;
+    if(cy<hy){
+      ctx.fillStyle='#ffe08a'; ctx.beginPath(); ctx.arc(cx,cy,26,0,TAU); ctx.fill();
+      ctx.fillStyle='rgba(255,224,134,0.35)'; ctx.beginPath(); ctx.arc(cx,cy,52,0,TAU); ctx.fill();
+    } else if(night>0.25){
+      const mang=ang+Math.PI, mx=VW/2-Math.cos(mang)*R, my=hy-Math.sin(mang)*R;
+      ctx.fillStyle='#e8eefd'; ctx.beginPath(); ctx.arc(mx,my,18,0,TAU); ctx.fill();
+      ctx.fillStyle='rgba(232,238,253,0.3)'; ctx.beginPath(); ctx.arc(mx,my,40,0,TAU); ctx.fill();
+    }
+  } else {
+    ctx.fillStyle=THEMES[state.floor].bg; ctx.fillRect(-30,-30,VW+60,VH+60);
+  }
   drawTiles();
   for(const tr of torches){
     const sx=tr.x-cam.x, sy=tr.y-cam.y;
     if(sx>-30&&sy>-30&&sx<VW+30&&sy<VH+30) drawTorchOne(tr);
   }
   if(state.floor===0) drawFlowers();
+  // locked doors and pressure plates
+  for(const sw of switches){
+    const sx=sw.x*TS-cam.x, sy=sw.y*TS-cam.y;
+    if(sx<-30||sy<-30||sx>VW+30||sy>VH+30) continue;
+    ctx.fillStyle=sw.active?'#7ee787':'#e8e2d0';
+    ctx.beginPath(); ctx.arc(sx+TS/2,sy+TS/2,7,0,TAU); ctx.fill();
+    ctx.strokeStyle='rgba(0,0,0,0.5)'; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(sx+TS/2,sy+TS/2,7,0,TAU); ctx.stroke();
+    ctx.fillStyle='#fff'; ctx.beginPath(); ctx.arc(sx+TS/2,sy+TS/2,3,0,TAU); ctx.fill();
+  }
+  for(let ty=Math.max(0,Math.floor(cam.y/TS)-1);ty<=Math.min(mapH-1,Math.floor((cam.y+VH)/TS)+1);ty++)
+  for(let tx=Math.max(0,Math.floor(cam.x/TS)-1);tx<=Math.min(mapW-1,Math.floor((cam.x+VW)/TS)+1);tx++){
+    if(tileAt(tx,ty)!==T_DOOR) continue;
+    const sx=tx*TS-cam.x, sy=ty*TS-cam.y;
+    ctx.fillStyle='#4a3a22'; ctx.fillRect(sx+2,sy+2,TS-4,TS-4);
+    ctx.strokeStyle='#8a7a5a'; ctx.lineWidth=2; ctx.strokeRect(sx+2,sy+2,TS-4,TS-4);
+    ctx.fillStyle='#5a4a2a'; ctx.fillRect(sx+8,sy+8,TS-16,TS-16);
+  }
 
   // depth-sorted entities
   const drawables=[];
