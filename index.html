@@ -149,8 +149,8 @@ let mapW=2000, mapH=2000;
 const SURF_W=2000, SURF_H=2000;   // overworld size (dungeons reuse mapW/mapH at their own scale)
 let tiles=null, tileVar=null, tempCat=null;   // 0=cold,1=temperate,2=hot — keeps cold biomes off warm ones
 const VILLAGE={x:1000,y:1000,r:16};
-// open patch of plaza just right of the well - keeps the hero out of the prop/NPC pocket
-const SPAWN={x:(VILLAGE.x+1.5)*TS, y:(VILLAGE.y+0.75)*TS};
+// open patch of plaza beside the well - keeps the hero out of the prop/NPC pocket
+const SPAWN={x:(VILLAGE.x+0.45)*TS, y:(VILLAGE.y+0.9)*TS};
 const CORRUPT={x:1360,y:1400,r:80};
 let trees=[], treeGrid=new Map(), rocks=[], flowers=[], torches=[], chests=[], buildings=[], props=[], shrines=[], lavas=[], switches=[];
 let entrance=null, returnPortal=null;
@@ -2125,8 +2125,8 @@ function updateCam(dt){
   const maxX=mapW*TS-VW, maxY=mapH*TS-VH;
   const tx = maxX<=0 ? maxX/2 : clamp(player.x-VW/2,0,maxX);
   const ty = maxY<=0 ? maxY/2 : clamp(player.y-VH/2,0,maxY);
-  cam.x=lerp(cam.x,tx,1-Math.pow(0.0001,dt));
-  cam.y=lerp(cam.y,ty,1-Math.pow(0.0001,dt));
+  cam.x=tx;   // tight follow: the hero is always centered while moving
+  cam.y=ty;
 }
 
 /* ---------------- update ---------------- */
@@ -3690,11 +3690,11 @@ function drawPortalOne(po){
 }
 
 /* ---------------- pixel-art hero ----------------
-   24x30 hand-built pixel sprite, painted onto an offscreen canvas at load
-   time and blitted at 2x with nearest-neighbour sampling. No external assets. */
-let PLAYER_TEX=null;
-const PX_W=24, PX_H=30, PX_SCALE=2;   // 48x60 on screen - about two tiles tall
-function makePlayerTex(){
+   24x30 hand-built pixel sprite (facing right, legs swap on a walk cycle,
+   flipped when moving left), painted onto offscreen canvases at load time
+   and blitted with nearest-neighbour sampling. No external assets. */
+const PX_W=24, PX_H=30, PX_SCALE=1.5;   // 36x45 on screen - smaller, NPC-proportioned
+function makePlayerTex(frame=0){
   const cv=document.createElement('canvas'); cv.width=PX_W; cv.height=PX_H;
   const g=cv.getContext('2d'); g.imageSmoothingEnabled=false;
   const px=(x,y,w,h,c)=>{ g.fillStyle=c; g.fillRect(x,y,w,h); };
@@ -3734,16 +3734,26 @@ function makePlayerTex(){
   px(17,15,3,5,'#3f6fd8');
   px(18,15,1,5,'#5f8ef5');
   px(17,20,3,2,'#f2c18e');
-  /* legs + boots */
-  px(7,22,10,8,OUT);
-  px(8,23,3,4,'#333042');
-  px(13,23,3,4,'#333042');
-  px(8,27,4,2,'#4a2f1a');
-  px(12,27,4,2,'#4a2f1a');
-  px(8,29,4,1,'#241608');
-  px(12,29,4,1,'#241608');
+  /* legs + boots (two-frame walk cycle) */
+  const L=frame?LEGF1:LEGF0;
+  for(const r of L) px(r[0],r[1],r[2],r[3],r[4]);
   return cv;
 }
+const LEGF0=[
+  [7,22,10,8,'#211720'],[13,23,3,4,'#333042'],[8,23,3,4,'#333042'],
+  [12,27,4,2,'#4a2f1a'],[8,27,4,2,'#4a2f1a'],
+  [12,29,4,1,'#241608'],[8,29,4,1,'#241608'],
+];
+const LEGF1=[
+  [7,22,10,8,'#211720'],[8,23,3,4,'#333042'],[13,23,3,4,'#333042'],
+  [8,27,4,2,'#4a2f1a'],[12,27,4,2,'#4a2f1a'],
+  [8,29,4,1,'#241608'],[12,29,4,1,'#241608'],
+];
+function playerTex(frame=0){
+  if(!PLAYER_TEXS[frame]) PLAYER_TEXS[frame]=makePlayerTex(frame);
+  return PLAYER_TEXS[frame];
+}
+const PLAYER_TEXS={};
 function drawSlash(sx,sy,prog,dir){
   const a0=dir-1.5, a1=dir+1.0, a=lerp(a0,a1,prog);
   ctx.strokeStyle='rgba(255,255,255,0.8)'; ctx.lineWidth=4; ctx.lineCap='round';
@@ -3755,19 +3765,21 @@ function drawPlayer(){
   const p=player;
   const sx=p.x-cam.x, sy=p.y-cam.y;
   const bob=p.moving?Math.sin(p.walkT)*1.6:Math.sin(state.time*2.2)*0.8;
-  const ey=sy-12;   // hands/weapon height on the taller sprite
+  const ey=sy-12;   // hands/weapon height on the sprite
+  const S=PX_SCALE/2;   // overlay effect scale for the smaller hero
   const blink = p.invulnT>0 && (Math.floor(state.time*14)%2===0);
   if(blink && state.mode==='play') return;
-  if(!PLAYER_TEX) PLAYER_TEX=makePlayerTex();
-  shadowEllipse(sx, sy+8, 13, 5);
+  shadowEllipse(sx, sy+7, 11, 4);
   const flip = p.face.x<0;
   const sw=PX_W*PX_SCALE, sh=PX_H*PX_SCALE;
+  const wf=p.moving?(Math.floor(p.walkT*9)%2):0;   // walk cycle frame
+  const tex=playerTex(wf);
   ctx.save();
   ctx.translate(sx-sw/2, sy-sh+9+bob);
   ctx.scale(flip?-1:1, 1);
   if(flip) ctx.translate(-sw, 0);
   ctx.imageSmoothingEnabled=false;
-  ctx.drawImage(PLAYER_TEX,0,0,PX_W,PX_H,0,0,sw,sh);
+  ctx.drawImage(tex,0,0,PX_W,PX_H,0,0,sw,sh);
   ctx.imageSmoothingEnabled=true;
   ctx.restore();
   if(p.weapon==='bow' && p.bow){
@@ -3777,6 +3789,7 @@ function drawPlayer(){
     const prog=drawing?1-p.bowDraw/0.38:0;
     ctx.save();
     ctx.translate(sx,ey+bob);
+    ctx.scale(S,S);
     ctx.rotate(fa);
     ctx.strokeStyle='#8a5a2c'; ctx.lineWidth=3; ctx.lineCap='round';
     ctx.beginPath();
@@ -3803,40 +3816,41 @@ function drawPlayer(){
       ctx.fillStyle=`rgba(255,215,94,${gl*0.5})`;
       ctx.beginPath(); ctx.arc(sx+Math.cos(fa)*16,ey+bob+Math.sin(fa)*16,3,0,TAU); ctx.fill();
     }
-    ctx.strokeStyle='#b8b8c8'; ctx.lineWidth=3; ctx.lineCap='round';
-    ctx.beginPath(); ctx.moveTo(sx+6,ey+6+bob); ctx.lineTo(sx+9,ey+13+bob); ctx.stroke();
+    ctx.strokeStyle='#b8b8c8'; ctx.lineWidth=3*S; ctx.lineCap='round';
+    ctx.beginPath(); ctx.moveTo(sx+6*S,ey+6*S+bob); ctx.lineTo(sx+9*S,ey+13*S+bob); ctx.stroke();
   } else if(p.swingT>0){
     const prog=1-p.swingT/0.18;
     const a0=p.swingDir-1.5, a1=p.swingDir+1.0;
     const a=lerp(a0,a1,prog);
-    ctx.strokeStyle='rgba(255,255,255,0.75)'; ctx.lineWidth=4; ctx.lineCap='round';
-    ctx.beginPath(); ctx.arc(sx,ey,42,a0,a); ctx.stroke();
-    ctx.strokeStyle='rgba(255,215,94,0.9)'; ctx.lineWidth=2;
-    ctx.beginPath(); ctx.moveTo(sx+Math.cos(a)*22,ey+Math.sin(a)*22);
-    ctx.lineTo(sx+Math.cos(a)*44,ey+Math.sin(a)*44); ctx.stroke();
+    ctx.strokeStyle='rgba(255,255,255,0.75)'; ctx.lineWidth=4*S; ctx.lineCap='round';
+    ctx.beginPath(); ctx.arc(sx,ey,42*S,a0,a); ctx.stroke();
+    ctx.strokeStyle='rgba(255,215,94,0.9)'; ctx.lineWidth=2*S;
+    ctx.beginPath(); ctx.moveTo(sx+Math.cos(a)*22*S,ey+Math.sin(a)*22*S);
+    ctx.lineTo(sx+Math.cos(a)*44*S,ey+Math.sin(a)*44*S); ctx.stroke();
   }
   /* Dune Whirl sweep */
   if(p.whirlT>0){
     const pr=1-p.whirlT/0.35;
-    ctx.strokeStyle=`rgba(255,179,107,${0.8-pr*0.6})`; ctx.lineWidth=5; ctx.lineCap='round';
-    ctx.beginPath(); ctx.arc(sx,ey,46,pr*TAU*1.6,pr*TAU*1.6+2.4); ctx.stroke();
+    ctx.strokeStyle=`rgba(255,179,107,${0.8-pr*0.6})`; ctx.lineWidth=5*S; ctx.lineCap='round';
+    ctx.beginPath(); ctx.arc(sx,ey,46*S,pr*TAU*1.6,pr*TAU*1.6+2.4); ctx.stroke();
   }
   /* drinking: raise the flask and chug (movement locked by update) */
   if(p.drink){
     const def=IDEF[p.drink.slot&&p.drink.slot.id||'p_health']||IDEF.p_health;
     const prog=clamp(p.drink.t/p.drink.max,0,1);
     ctx.save();
-    ctx.translate(sx+5,ey+4+bob);
+    ctx.translate(sx,ey+bob);
+    ctx.scale(S,S);
     ctx.rotate(-0.7+prog*0.6);
     ctx.fillStyle=def.color; roundRect(-3,-6,6,11,2.5); ctx.fill();
     ctx.fillStyle='#c8c8d0'; ctx.fillRect(-1.5,-9,3,3);
     ctx.fillStyle='rgba(255,255,255,0.45)'; ctx.fillRect(-2,-4,2,6);
     ctx.restore();
     // channel progress ring over the head
-    ctx.strokeStyle='rgba(0,0,0,0.55)'; ctx.lineWidth=4;
-    ctx.beginPath(); ctx.arc(sx,sy-44,9,0,TAU); ctx.stroke();
-    ctx.strokeStyle=def.color; ctx.lineWidth=3;
-    ctx.beginPath(); ctx.arc(sx,sy-44,9,-Math.PI/2,-Math.PI/2+prog*TAU); ctx.stroke();
+    ctx.strokeStyle='rgba(0,0,0,0.55)'; ctx.lineWidth=4*S;
+    ctx.beginPath(); ctx.arc(sx,ey-32*S,9*S,0,TAU); ctx.stroke();
+    ctx.strokeStyle=def.color; ctx.lineWidth=3*S;
+    ctx.beginPath(); ctx.arc(sx,ey-32*S,9*S,-Math.PI/2,-Math.PI/2+prog*TAU); ctx.stroke();
   }
 }
 function drawNPC(n){
@@ -4291,7 +4305,7 @@ function drawBoss(){
     ctx.fillStyle='rgba(255,60,30,0.18)';
     ctx.beginPath(); ctx.arc(sx,sy,b.telegraphR,0,TAU); ctx.fill();
     ctx.strokeStyle='rgba(255,80,40,0.7)'; ctx.lineWidth=3;
-    ctx.beginPath(); ctx.arc(sx,sy,b.telegraphR*(1-b.telegraph/0.95),0,TAU); ctx.stroke();
+    ctx.beginPath(); ctx.arc(sx,sy,Math.max(0,b.telegraphR*(1-b.telegraph/0.95)),0,TAU); ctx.stroke();
   }
   if(b.kind==='pyrelord'&&b.telegraph>0){
     ctx.strokeStyle='rgba(255,80,40,0.5)'; ctx.lineWidth=10;

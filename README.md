@@ -11,18 +11,21 @@ install, no build, no assets — everything is generated in code.
 
 ## Features
 
-- Procedural world (1000×1000) with **9 biomes**: Verdant Fields, Corruption, Cinder
+- Procedural world (**2000×2000**) with **14 biomes**: Verdant Fields, Corruption, Cinder
   Caldera, Ashen Wastes, Frostpeak Tundra, Golden Desert, Murk Swamp, Fungal Hollow,
   Crimson Scar, Amber Savanna, Emerald Jungle, Rusted Badlands, Blossom Grove,
   Mistwood — each with its own terrain texture, props (pines, cacti, palms, cherry
   trees, crystals, mushrooms…), palette and monster table. The main village
-  always stands on Verdant Fields plains.
+  always stands on Verdant Fields plains. Cold biomes never border warm ones (coarse
+  climate field + smoothing pass).
 - **24 enemy types** across surface & dungeons: slimes, skeletons, wraiths, necromancers,
   zombies, wolves, dire wolves, spiders, scorpions, yetis, sporecaps, imps, muck blobs,
   bandits, lava hounds, shades, vultures, hornets, apes, sprites, wisps, emberites…
   plus **mimics** — chest-monsters that ambush greedy looters (floor 2+)
-- 5 dungeon floors of **real rooms and arenas** (pillared halls, plazas, vaults,
-  boss arenas behind the Ember Seal) — no mazes
+- **8 dungeon floors** of **real rooms and arenas** (pillared halls, plazas, vaults,
+  boss arenas behind the Ember Seal, two pressure-plate/treasure-door puzzles) — no mazes
+- **8 floor bosses** + the corrupted Warden — **MOUL, THE BONE KING, THE CINDER GOLEM,
+  MALACHAR, PYRELORD, THE EMBER TYRANT, THE DROWNED KING, SHARDLORD VAEL, THE CORE GOLEM**
 - **Ray-traced lighting on every floor, surface included**: walls cast real shadows,
   colored torch/lava/shrine light, line-of-sight checks — dusk on the surface lights
   altar sigils, cottage windows and lantern-lit villagers. Sword swings can no longer
@@ -44,10 +47,15 @@ install, no build, no assets — everything is generated in code.
 - **Item tooltips** — hover any quick-bar or inventory slot to read what it is.
 - **Inventory**: 27-slot satchel (9×3) + Fortnite-style 5-slot quick bar at the
   top-right, keys `1`–`5` or click, `F` uses the selected item
-- Hand-drawn-feeling sprites: caped hero, robed villagers with per-kind props,
+- Hand-drawn-feeling sprites: caped hero (36x45 pixel art with a two-frame walk cycle,
+  swing/whirl/drink overlays), robed villagers with per-kind props,
   shingled huts with smoking chimneys and glowing windows, top-lit enemies
-- 5 bosses, shrine trials, hidden relic vaults, elites, chests, minimap, quests,
-  synthesized audio
+- Shrine trials, hidden relic vaults, elites, chests, minimap, quests, day/night
+  cycle, synthesized audio
+- **v3.3 fixes**: hero sprite shrunk to a readable NPC-proportioned size with a real
+  two-frame **walk animation** (plus swing / whirl / drink motion), camera now **snaps
+  tight to the hero** so he is always centered while moving, and the **player spawns in
+  an open plaza spot** beside the village well (previously wedged into a collision pocket).
 
 ## Controls
 

@@ -1,4 +1,27 @@
-# TODO — Emberfall v3.1
+# TODO — Emberfall
+
+## SHIPPED v3.3 (this session)
+- ✅ **Hero animation + size**: pixel hero is now a smaller, NPC-proportioned 36x45
+  sprite with a **two-frame walk cycle** (legs swap), plus swing / bow-draw / whirl /
+  drink overlays scaled to the new size. No more static "monster pose".
+- ✅ **Camera**: replaced lerp-based follow with a tight snap to `player ± viewport/2`
+  (clamped) — the hero is now always centered on screen while moving and the world
+  scrolls with him (fixes the frozen / off-center view).
+- ✅ **Player spawn**: hero now spawns in an open plaza tile beside the village well
+  (was wedged into a blocked pocket, so early movement felt dead).
+- ✅ **Fixed render crash** on the Core Golem: boss telegraph ring radius could go
+  negative (`telegraphR*(1-telegraph/0.95)`) -> black screen mid-fight.
+
+## SHIPPED v3.2 (fixed after the previous batch)
+- ✅ Overworld restored to the **2000x2000** map (`genSurface()` had a stale 1000x1000
+  reset) — village/spawn no longer sits on the map's bottom-right edge and camera
+  clamping no longer freezes the view.
+- ✅ Added **floor spawn tables** for floors 6-8 (drownedking/shardlord/coregolem batch)
+  and **THEMES** for floors 6-8 — descending past floor 5 previously crashed the game.
+- ✅ Boss fog-of-war/minimap theme + boss AI verified end-to-end (all 8 bosses spawn and
+  can be slain; floor 8 victory sets the portal).
+- ✅ Pressure-plate puzzle (switch -> locked door -> treasure chest) verified on floors
+  2+ (door tile flips T_DOOR -> T_FLOOR on activation).
 
 ## SHIPPED v3.1 (this session)
 - ✅ **Fortnite-style potion chugging** — consumables open a drink channel
@@ -57,6 +80,8 @@
 - Native **C/raylib port** (`emberfall.c`) — raylib 6.2 win64 mingw bundle
   download looked truncated (1.7 MB), re-download before building.
 - `wip/p01–p20.html` parts are historical only — `index.html` is the game.
+- **README/TODO drift** — both docs were stale after the v3.2/v3.3 batches; now synced
+  (2000x2000 map, 14 biomes, 8 floors/bosses, v3.3 fixes).
 
 > **Note to future session (opencode):** `index.html` is the single source of
 > truth (~5000 lines, self-contained). Drink channel = `startDrink/finishDrink/
