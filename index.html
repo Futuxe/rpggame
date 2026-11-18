@@ -146,8 +146,11 @@ const BIOME_SPAWNS={
 const FLNAMES={1:'The Bone Hollows',2:'The Molten Gaol',3:'The Wailing Crypt',4:'The Ashen Deep',5:'The Ember Throne',6:'The Sunken Sanctum',7:'The Glass Foundry',8:'The Core Forge'};
 const FLOORBOSS={1:'boneking',2:'cindergolem',3:'malachar',4:'pyrelord',5:'tyrant',6:'drownedking',7:'shardlord',8:'coregolem'};
 let mapW=2000, mapH=2000;
+const SURF_W=2000, SURF_H=2000;   // overworld size (dungeons reuse mapW/mapH at their own scale)
 let tiles=null, tileVar=null, tempCat=null;   // 0=cold,1=temperate,2=hot — keeps cold biomes off warm ones
 const VILLAGE={x:1000,y:1000,r:16};
+// open patch of plaza just right of the well - keeps the hero out of the prop/NPC pocket
+const SPAWN={x:(VILLAGE.x+1.5)*TS, y:(VILLAGE.y+0.75)*TS};
 const CORRUPT={x:1360,y:1400,r:80};
 let trees=[], treeGrid=new Map(), rocks=[], flowers=[], torches=[], chests=[], buildings=[], props=[], shrines=[], lavas=[], switches=[];
 let entrance=null, returnPortal=null;
@@ -170,7 +173,7 @@ function coarseField(fn){
   };
 }
 function genSurface(){
-  mapW=1000; mapH=1000;
+  mapW=SURF_W; mapH=SURF_H;   // dungeons shrink the grid, so always restore the overworld size
   tiles=new Uint8Array(mapW*mapH);
   tileVar=new Float32Array(mapW*mapH);
   tempCat=new Uint8Array(mapW*mapH);
@@ -187,8 +190,8 @@ function genSurface(){
     const c=hmap[(y0+1)*hw+x0], d=hmap[(y0+1)*hw+x0+1];
     return a*(1-tx)*(1-ty)+b*tx*(1-ty)+c*(1-tx)*ty+d*tx*ty;
   };
-  const tempOf=coarseField((x,y)=>fbm(x*0.021+91.3, y*0.021+17.7));
-  const moistOf=coarseField((x,y)=>fbm(x*0.024+7.1, y*0.024+251.3));
+  const tempOf=coarseField((x,y)=>fbm(x*0.010+91.3, y*0.010+17.7));
+  const moistOf=coarseField((x,y)=>fbm(x*0.012+7.1, y*0.012+251.3));
   for(let y=0;y<mapH;y++)for(let x=0;x<mapW;x++){
     const i=y*mapW+x;
     let t = hs(x,y)<0.345 ? T_WATER : T_GRASS;
@@ -1040,6 +1043,9 @@ const SPAWNS={
   3:['skeleton','wraith','necro','bat','shade'],
   4:['wraith','necro','golem','bat','shade','hound'],
   5:['wraith','necro','golem','skeleton','bat','hound'],
+  6:['dslime','muck','leech','wisp','wraith','bat'],
+  7:['golem','emberite','skeleton','imp','hound','shade'],
+  8:['golem','emberite','wraith','hound','shade','necro'],
 };
 function makeEnemy(type,x,y,o={}){
   const d=EDEF[type], fl=Math.max(0,state.floor);
@@ -1858,9 +1864,10 @@ function startTransition(cb){ state.trans={t:0,phase:'out',cb}; }
 function toSurface(reason){
   state.floor=0; genSurface(); spawnNPCs(); buildMinimap();
   enemies=[]; arrows=[]; drops=[];
-  player.x=VILLAGE.x*TS+TS/2; player.y=(VILLAGE.y+2.2)*TS;
+  player.x=SPAWN.x; player.y=SPAWN.y;
   player.x=findFreeSpot(player.x,player.y,player.r).x;
   state.boss=null; state.portal=null;
+  snapCam();
   addText(player.x,player.y-40,reason,'#c9d1d9',2.5,true);
 }
 function descend(){
@@ -1879,7 +1886,7 @@ function descend(){
     genDungeon(state.floor);
     player.x=state.dstart.x; player.y=state.dstart.y;
     populateFloor(); buildMinimap();
-    cam.x=player.x-VW/2; cam.y=player.y-VH/2;
+    snapCam();
     sfx('quest');
     state.cine={t:0,dur:2.9,head:'EMBERFALL DUNGEONS',title:'FLOOR '+state.floor,sub:FLNAMES[state.floor]};
     addText(player.x,player.y-46,'Floor '+state.floor+' — '+FLNAMES[state.floor],'#ff8a5e',3,true);
@@ -1902,7 +1909,7 @@ function ascend(){
       genDungeon(state.floor);
       player.x=state.dstart.x; player.y=state.dstart.y;
       populateFloor(); buildMinimap();
-      cam.x=player.x-VW/2; cam.y=player.y-VH/2;
+      snapCam();
       state.cine={t:0,dur:2.4,head:'EMBERFALL DUNGEONS',title:'FLOOR '+state.floor,sub:FLNAMES[state.floor]};
       addText(player.x,player.y-46,'Floor '+state.floor+' — '+FLNAMES[state.floor],'#ff8a5e',2.5,true);
     }
@@ -1950,7 +1957,7 @@ function interact(){
     else if(n.kind==='vendor') vendorDialog(n);
     else openDialog('Little Osk',[
       'I saw a BIG red monster in the south-east wastes...',
-      'Papa says the stairway it guards goes DOWN, like, five floors deep!',
+      'Papa says the stairway it guards goes DOWN, like, eight floors deep!',
       'And there are glowing shrines down there — Papa says never press E on them.',
       'Be careful, mister!',
     ]);
@@ -2089,7 +2096,8 @@ cvs.addEventListener('contextmenu',e=>e.preventDefault());
 
 function startGame(){
   state.mode='play';
-  player.x=VILLAGE.x*TS+TS/2; player.y=(VILLAGE.y+2.2)*TS;
+  player.x=SPAWN.x; player.y=SPAWN.y;
+  snapCam();
   sfx('quest');
   addText(player.x,player.y-40,'Welcome to Emberfall','#ffd75e',3,true);
 }
@@ -2097,7 +2105,9 @@ function respawn(){
   if(state.floor!==0){ genSurface(); spawnNPCs(); buildMinimap(); state.floor=0; }
   player.hp=player.maxHp;
   player.gold=Math.floor(player.gold*0.8);
-  player.x=VILLAGE.x*TS+TS/2; player.y=(VILLAGE.y+2.2)*TS;
+  player.x=SPAWN.x; player.y=SPAWN.y;
+  player.x=findFreeSpot(player.x,player.y,player.r).x;
+  snapCam();
   enemies=[]; arrows=[]; drops=[];
   state.boss=null; state.portal=null; state.trans=null;
   state.mode='play'; player.invulnT=2;
@@ -2106,6 +2116,11 @@ function respawn(){
 
 /* ---------------- camera ---------------- */
 const cam={x:0,y:0};
+function snapCam(){
+  const maxX=Math.max(0,mapW*TS-VW), maxY=Math.max(0,mapH*TS-VH);
+  cam.x=clamp(player.x-VW/2,0,maxX);
+  cam.y=clamp(player.y-VH/2,0,maxY);
+}
 function updateCam(dt){
   const maxX=mapW*TS-VW, maxY=mapH*TS-VH;
   const tx = maxX<=0 ? maxX/2 : clamp(player.x-VW/2,0,maxX);
@@ -2441,6 +2456,9 @@ const THEMES={
   3:{bg:'#0b0810', wall:'#332a44', wallTop:'#493c63', floor:'#251f31', floorHi:'#302842', fog:'rgba(7,4,14,0.94)'},
   4:{bg:'#100d0a', wall:'#3d342c', wallTop:'#54483b', floor:'#2a2521', floorHi:'#352f28', fog:'rgba(9,6,4,0.94)'},
   5:{bg:'#0e0705', wall:'#41292a', wallTop:'#583c3e', floor:'#2b1d1d', floorHi:'#372727', fog:'rgba(13,3,2,0.95)'},
+  6:{bg:'#061014', wall:'#2e4a4e', wallTop:'#3f6268', floor:'#203638', floorHi:'#2a4447', fog:'rgba(3,10,14,0.94)'},
+  7:{bg:'#0d0812', wall:'#463a56', wallTop:'#5e4d72', floor:'#31283c', floorHi:'#3e334b', fog:'rgba(8,4,12,0.94)'},
+  8:{bg:'#0f0505', wall:'#4a2a26', wallTop:'#653a34', floor:'#331d1a', floorHi:'#402420', fog:'rgba(14,3,2,0.95)'},
 };
 
 /* ---------- procedural material textures ----------
@@ -3672,16 +3690,58 @@ function drawPortalOne(po){
 }
 
 /* ---------------- pixel-art hero ----------------
-   Hand-placed 24x24 pixel sprite (facing right, flipped when moving left),
-   painted onto an offscreen canvas at load time. No external assets.           */
+   24x30 hand-built pixel sprite, painted onto an offscreen canvas at load
+   time and blitted at 2x with nearest-neighbour sampling. No external assets. */
 let PLAYER_TEX=null;
-const PX_W=24, PX_H=24, PX_SCALE=2;   // 24x24 tex drawn at 48x48 for a readable hero
+const PX_W=24, PX_H=30, PX_SCALE=2;   // 48x60 on screen - about two tiles tall
 function makePlayerTex(){
   const cv=document.createElement('canvas'); cv.width=PX_W; cv.height=PX_H;
   const g=cv.getContext('2d'); g.imageSmoothingEnabled=false;
-  const C={' ':null,'.':'#ffffff','s':'#f0c49a','S':'#e0b88a','h':'#5a3a1e','H':'#3e2512','e':'#222222','t':'#4a80e8','T':'#2c56a8','b':'#5a3a22','B':'#ffd75e','l':'#3a2a1c','L':'#221a12','c':'#a33b3b','C':'#7a2525','w':'#c8a44a','W':'#a88a32'};
-  const ROWS=['                        ','     HHHH               ','    hhhhH               ','   hhHHHh               ','  hHSeesHh              ','   hHHHHh               ','    HHHH                ','    cccccc              ','   cTTTTTTcc            ','   cTTttTTcc            ','   cTTBBTTcc            ','   cTTBBTTcc            ','   cTTTTTTcc            ','    cccc                ','     llll               ','     llll               ','    ll  ll              ','    ll  ll              ','                        ','                        ','                        ','                        ','       wwwww            ','       W    w           '];
-  for(let y=0;y<ROWS.length;y++)for(let x=0;x<ROWS[y].length;x++){const col=C[ROWS[y][x]];if(!col)continue;g.fillStyle=col;g.fillRect(x,y,1,1);}
+  const px=(x,y,w,h,c)=>{ g.fillStyle=c; g.fillRect(x,y,w,h); };
+  const OUT='#211720';
+  /* cape + sword sit behind the body (visible on the back/left side) */
+  px(3,12,5,11,OUT); px(4,13,3,9,'#8f2a2a'); px(4,20,3,2,'#6e1e1e'); px(3,22,5,1,OUT);
+  px(4,7,1,1,'#c8d0e0'); px(5,8,1,1,'#9aa4b8'); px(6,9,1,1,'#9aa4b8'); px(7,10,1,1,'#9aa4b8');
+  px(4,10,3,1,'#c8a44a'); px(5,11,2,2,'#5a3a1e');
+  /* head silhouette */
+  px(6,1,12,12,OUT);
+  /* hair */
+  px(7,2,10,5,'#4a2c16');
+  px(8,1,7,2,'#4a2c16');
+  px(8,2,6,1,'#6b4222');
+  px(7,6,2,4,'#3a2010');
+  /* face */
+  px(8,6,9,6,'#f2c18e');
+  px(15,7,2,4,'#d9a06c');
+  /* eye, brow, nose, mouth */
+  px(13,7,2,2,'#ffffff'); px(14,8,1,1,'#232323');
+  px(12,6,4,1,'#3a2010');
+  px(15,9,2,1,'#e0a973');
+  px(13,11,2,1,'#8a4a3a');
+  /* neck */
+  px(10,12,4,2,'#e0b083');
+  /* torso silhouette + tunic shading */
+  px(5,13,14,10,OUT);
+  px(6,14,12,8,'#3f6fd8');
+  px(6,14,2,8,'#5f8ef5');
+  px(16,14,2,8,'#2b4aa0');
+  px(9,14,6,1,'#2b4aa0');
+  /* belt + buckle */
+  px(5,21,14,2,'#4a2f1a');
+  px(10,21,2,2,'#ffd75e');
+  /* front arm */
+  px(17,14,4,8,OUT);
+  px(17,15,3,5,'#3f6fd8');
+  px(18,15,1,5,'#5f8ef5');
+  px(17,20,3,2,'#f2c18e');
+  /* legs + boots */
+  px(7,22,10,8,OUT);
+  px(8,23,3,4,'#333042');
+  px(13,23,3,4,'#333042');
+  px(8,27,4,2,'#4a2f1a');
+  px(12,27,4,2,'#4a2f1a');
+  px(8,29,4,1,'#241608');
+  px(12,29,4,1,'#241608');
   return cv;
 }
 function drawSlash(sx,sy,prog,dir){
@@ -3695,13 +3755,15 @@ function drawPlayer(){
   const p=player;
   const sx=p.x-cam.x, sy=p.y-cam.y;
   const bob=p.moving?Math.sin(p.walkT)*1.6:Math.sin(state.time*2.2)*0.8;
+  const ey=sy-12;   // hands/weapon height on the taller sprite
   const blink = p.invulnT>0 && (Math.floor(state.time*14)%2===0);
   if(blink && state.mode==='play') return;
   if(!PLAYER_TEX) PLAYER_TEX=makePlayerTex();
+  shadowEllipse(sx, sy+8, 13, 5);
   const flip = p.face.x<0;
   const sw=PX_W*PX_SCALE, sh=PX_H*PX_SCALE;
   ctx.save();
-  ctx.translate(sx-sw/2+2, sy-sh/2-6+bob);
+  ctx.translate(sx-sw/2, sy-sh+9+bob);
   ctx.scale(flip?-1:1, 1);
   if(flip) ctx.translate(-sw, 0);
   ctx.imageSmoothingEnabled=false;
@@ -3714,7 +3776,7 @@ function drawPlayer(){
     const drawing=p.bowDraw>0;
     const prog=drawing?1-p.bowDraw/0.38:0;
     ctx.save();
-    ctx.translate(sx,sy-2+bob);
+    ctx.translate(sx,ey+bob);
     ctx.rotate(fa);
     ctx.strokeStyle='#8a5a2c'; ctx.lineWidth=3; ctx.lineCap='round';
     ctx.beginPath();
@@ -3739,35 +3801,32 @@ function drawPlayer(){
     if(drawing){
       const gl=0.4+0.5*prog;
       ctx.fillStyle=`rgba(255,215,94,${gl*0.5})`;
-      ctx.beginPath(); ctx.arc(sx+Math.cos(fa)*16,sy-2+bob+Math.sin(fa)*16,3,0,TAU); ctx.fill();
+      ctx.beginPath(); ctx.arc(sx+Math.cos(fa)*16,ey+bob+Math.sin(fa)*16,3,0,TAU); ctx.fill();
     }
     ctx.strokeStyle='#b8b8c8'; ctx.lineWidth=3; ctx.lineCap='round';
-    ctx.beginPath(); ctx.moveTo(sx+6,sy+4+bob); ctx.lineTo(sx+9,sy+11+bob); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(sx+6,ey+6+bob); ctx.lineTo(sx+9,ey+13+bob); ctx.stroke();
   } else if(p.swingT>0){
     const prog=1-p.swingT/0.18;
     const a0=p.swingDir-1.5, a1=p.swingDir+1.0;
     const a=lerp(a0,a1,prog);
     ctx.strokeStyle='rgba(255,255,255,0.75)'; ctx.lineWidth=4; ctx.lineCap='round';
-    ctx.beginPath(); ctx.arc(sx,sy,42,a0,a); ctx.stroke();
+    ctx.beginPath(); ctx.arc(sx,ey,42,a0,a); ctx.stroke();
     ctx.strokeStyle='rgba(255,215,94,0.9)'; ctx.lineWidth=2;
-    ctx.beginPath(); ctx.moveTo(sx+Math.cos(a)*22,sy+Math.sin(a)*22);
-    ctx.lineTo(sx+Math.cos(a)*44,sy+Math.sin(a)*44); ctx.stroke();
-  } else {
-    ctx.strokeStyle='#b8b8c8'; ctx.lineWidth=3; ctx.lineCap='round';
-    ctx.beginPath(); ctx.moveTo(sx+6,sy-10+bob); ctx.lineTo(sx+11,sy+2+bob); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(sx+Math.cos(a)*22,ey+Math.sin(a)*22);
+    ctx.lineTo(sx+Math.cos(a)*44,ey+Math.sin(a)*44); ctx.stroke();
   }
   /* Dune Whirl sweep */
   if(p.whirlT>0){
     const pr=1-p.whirlT/0.35;
     ctx.strokeStyle=`rgba(255,179,107,${0.8-pr*0.6})`; ctx.lineWidth=5; ctx.lineCap='round';
-    ctx.beginPath(); ctx.arc(sx,sy,46,pr*TAU*1.6,pr*TAU*1.6+2.4); ctx.stroke();
+    ctx.beginPath(); ctx.arc(sx,ey,46,pr*TAU*1.6,pr*TAU*1.6+2.4); ctx.stroke();
   }
   /* drinking: raise the flask and chug (movement locked by update) */
   if(p.drink){
     const def=IDEF[p.drink.slot&&p.drink.slot.id||'p_health']||IDEF.p_health;
     const prog=clamp(p.drink.t/p.drink.max,0,1);
     ctx.save();
-    ctx.translate(sx+5,sy-6+bob);
+    ctx.translate(sx+5,ey+4+bob);
     ctx.rotate(-0.7+prog*0.6);
     ctx.fillStyle=def.color; roundRect(-3,-6,6,11,2.5); ctx.fill();
     ctx.fillStyle='#c8c8d0'; ctx.fillRect(-1.5,-9,3,3);
@@ -3775,9 +3834,9 @@ function drawPlayer(){
     ctx.restore();
     // channel progress ring over the head
     ctx.strokeStyle='rgba(0,0,0,0.55)'; ctx.lineWidth=4;
-    ctx.beginPath(); ctx.arc(sx,sy-28,9,0,TAU); ctx.stroke();
+    ctx.beginPath(); ctx.arc(sx,sy-44,9,0,TAU); ctx.stroke();
     ctx.strokeStyle=def.color; ctx.lineWidth=3;
-    ctx.beginPath(); ctx.arc(sx,sy-28,9,-Math.PI/2,-Math.PI/2+prog*TAU); ctx.stroke();
+    ctx.beginPath(); ctx.arc(sx,sy-44,9,-Math.PI/2,-Math.PI/2+prog*TAU); ctx.stroke();
   }
 }
 function drawNPC(n){
@@ -4993,7 +5052,7 @@ function drawTitle(){
   ctx.fillStyle=grd;
   ctx.fillText('EMBERFALL',VW/2,VH*0.34);
   ctx.font='16px system-ui'; ctx.fillStyle='#c9d1d9';
-  ctx.fillText('the Ember Depths stir — 5 floors, 5 guardians, one throne',VW/2,VH*0.34+34);
+  ctx.fillText('the Ember Depths stir - 8 floors, 8 guardians, one throne',VW/2,VH*0.34+34);
   const cw=470, ch=275, cx0=(VW-cw)/2, cy0=VH*0.5;
   ctx.fillStyle='rgba(255,255,255,0.05)'; roundRect(cx0,cy0,cw,ch,12); ctx.fill();
   ctx.strokeStyle='rgba(255,215,94,0.3)'; ctx.lineWidth=1.5; roundRect(cx0,cy0,cw,ch,12); ctx.stroke();
@@ -5285,12 +5344,13 @@ function invClick(){
 genSurface();
 spawnNPCs();
 buildMinimap();
-player.x=VILLAGE.x*TS+TS/2; player.y=(VILLAGE.y+2.2)*TS;
+player.x=SPAWN.x; player.y=SPAWN.y;
 addItem('p_health',2);   // starter kit: 2 health potions land in the hotbar
 addItem('p_speed',1);
 addItem('p_strength',1);
 addItem('arrows',10);
 resize();
+snapCam();   // start the camera on the hero instead of lerping in from the map corner
 
 let last=performance.now();
 function frame(now){
